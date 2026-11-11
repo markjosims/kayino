@@ -1,0 +1,26 @@
+[project]
+name = "kayino"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [{ name = "Mark Joseph Simmons", email = "mjsimmons@ucsd.edu" }]
+requires-python = ">=3.12"
+dependencies = [
+  "attrs>=26.1.0",
+  "cattrs>=26.2.1",
+  "frozendict>=2.5.1",
+  "prompt-toolkit>=3.0.53",
+  "pygments>=2.21.0",
+  "pynini>=2.1.7",
+  "tabulate>=0.10.0",
+]
+
+[project.scripts]
+kayino = "kayino:main"
+
+[build-system]
+requires = ["uv_build>=0.12.17,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = ["ipython>=9.18.1", "pytest>=9.2.0"]

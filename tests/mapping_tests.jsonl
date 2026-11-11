@@ -1,0 +1,4 @@
+  {"text": "foo Foo", "expected": "Foo phoo", "mappings": {"f": "F", "F": "ph"}}
+  {"text": "tso se", "expected": "co she", "mappings": {"ts": "c", "s": "sh"}}
+  {"text": "ki cho", "expected": "chi xo", "mappings": {"k": "ch", "ch": "x"}}
+  {"text": "ki cho", "expected": "chi xo", "mappings": {"ki": "chi", "ch": "x"}}
