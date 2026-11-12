@@ -173,3 +173,18 @@ class RegexSymbols(Enum):
     LEFT_BRACKET = "["
     RIGHT_BRACKET = "]"
     DOT = "."
+
+
+LEFT_DELIMITERS = (
+    RegexSymbols.LEFT_BRACKET,
+    RegexSymbols.LEFT_PAREN,
+)
+RIGHT_DELIMITERS = (
+    RegexSymbols.RIGHT_BRACKET,
+    RegexSymbols.RIGHT_PAREN,
+)
+UNARY_OPERATORS = (
+    RegexSymbols.STAR,
+    RegexSymbols.PLUS,
+    RegexSymbols.OPTIONAL,
+)

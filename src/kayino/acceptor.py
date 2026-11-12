@@ -10,15 +10,19 @@ from __future__ import annotations
 
 import enum
 import re
-from functools import lru_cache
-from typing import Literal, Sequence, Type
+from collections.abc import Sequence
+from functools import lru_cache, wraps
+from typing import Literal
 
 import pynini
-from attrs import evolve
+from frozendict import frozendict
 from pynini.lib import rewrite
 
 from kayino.constants import MAX_OUTPUT_STRINGS
 from kayino.models import (
+    LEFT_DELIMITERS,
+    RIGHT_DELIMITERS,
+    UNARY_OPERATORS,
     AnonToken,
     Pattern,
     RegexSymbols,
@@ -26,6 +30,29 @@ from kayino.models import (
     Token,
     TokenGroup,
 )
+
+"""
+## Decorators
+"""
+
+
+def sequence_as_tuple(f: callable):
+    @wraps(f)
+    def g(seq):
+        t = tuple(seq)
+        return f(t)
+
+    return g
+
+
+def registry_as_frozendict(f: callable):
+    @wraps(f)
+    def g(reg):
+        frozen = frozendict({k: tuple(v) for k, v in reg.items()})
+        return f(frozen)
+
+    return g
+
 
 """
 ## Module-level constants
@@ -44,10 +71,18 @@ class PatternCompileStatus(enum.Enum):
 """
 
 
-@lru_cache(maxsize=1)
 def symbol_table_for_tokens(
     token_array: Sequence[Token] | None = None,
 ) -> pynini.SymbolTable:
+    return _symbol_table_for_tokens_inner(tuple(token_array))
+
+
+@sequence_as_tuple
+@lru_cache(maxsize=1)
+def _symbol_table_for_tokens_inner(
+    token_array: Sequence[Token] | None = None,
+) -> pynini.SymbolTable:
+
     sym_table = pynini.SymbolTable()
     if token_array:
         for token in token_array:
@@ -55,6 +90,7 @@ def symbol_table_for_tokens(
     return sym_table
 
 
+@sequence_as_tuple
 @lru_cache(maxsize=1)
 def get_sigma(token_array: Sequence[Token]) -> pynini.Fst:
     sym_table = symbol_table_for_tokens(token_array)
@@ -64,6 +100,7 @@ def get_sigma(token_array: Sequence[Token]) -> pynini.Fst:
     return sigma
 
 
+@sequence_as_tuple
 @lru_cache(maxsize=1)
 def get_sigma_star(token_array: Sequence[Token]) -> pynini.Fst:
     sigma = get_sigma(token_array)
@@ -75,16 +112,36 @@ def get_sigma_star(token_array: Sequence[Token]) -> pynini.Fst:
 """
 
 
+@registry_as_frozendict
 @lru_cache(maxsize=1)
 def _token_regex(registry: RegistryType) -> re.Pattern:
-    token_symbols = [token.string for token in registry.tokens]
-    group_symbols = [group.string for group in registry.token_groups]
+    token_symbols = [
+        token.string
+        for token in registry.get(
+            Token.__name__,
+            tuple(),
+        )
+    ]
+    group_symbols = [
+        group.string
+        for group in registry.get(
+            TokenGroup.__name__,
+            tuple(),
+        )
+    ]
+    pattern_symbols = [
+        pattern.string
+        for pattern in registry.get(
+            Pattern.__name__,
+            tuple(),
+        )
+    ]
     regex_symbols = [re.escape(item.value) for item in RegexSymbols]
     return re.compile(
         "("
         + "|".join(
             sorted(
-                token_symbols + group_symbols + regex_symbols,
+                token_symbols + group_symbols + pattern_symbols + regex_symbols,
                 key=len,
                 reverse=True,
             )
@@ -93,16 +150,19 @@ def _token_regex(registry: RegistryType) -> re.Pattern:
     )
 
 
+@sequence_as_tuple
 @lru_cache(maxsize=1)
 def get_token_string_map(token_array: Sequence[Token]) -> dict[str, Token]:
     return {token.string: token for token in token_array}
 
 
+@sequence_as_tuple
 @lru_cache(maxsize=1)
 def get_token_id_map(token_array: Sequence[Token]) -> dict[int, Token]:
     return {token.id: token for token in token_array}
 
 
+@sequence_as_tuple
 @lru_cache(maxsize=1)
 def get_token_group_map(token_groups: Sequence[TokenGroup]) -> dict[int, Token]:
     return {group.string: group for group in token_groups}
@@ -113,8 +173,8 @@ def tokenize_str(
     registry: RegistryType,
 ) -> tuple[Token | AnonToken]:
     token_regex = _token_regex(registry)
-    token_map = get_token_string_map(registry.tokens)
-    group_map = get_token_group_map(registry.token_groups)
+    token_map = get_token_string_map(registry[Token.__name__])
+    group_map = get_token_group_map(registry[TokenGroup.__name__])
     tokenized = []
     split_by_tokens = token_regex.split(pattern_str)
     for word in split_by_tokens:
@@ -149,11 +209,11 @@ def _atom_to_fst(
     token: Token | TokenGroup | AnonToken,
     registry: RegistryType,
 ) -> pynini.Fst:
-    sym_table = symbol_table_for_tokens(registry.tokens)
+    sym_table = symbol_table_for_tokens(registry[Token.__name__])
     return pynini.accep(token.string, token_type=sym_table)
 
 
-@lru_cache()
+@lru_cache(maxsize=256)
 def _group_or_pattern_to_fst(token: TokenGroup) -> pynini.Fst:
     pass
 
@@ -166,9 +226,9 @@ def _parse_factor_sequence(
     fsas: list[pynini.Fst] = []
     while i < len(tokens):
         tok = tokens[i]
-        if tok.kind in ("right_delimiter", "pipe_operator", "unary_operator"):
+        if tok in RIGHT_DELIMITERS + UNARY_OPERATORS + (RegexSymbols.OPTIONAL,):
             break
-        if tok.kind == "left_delimiter":
+        if tok in LEFT_DELIMITERS:
             f, i = _parse_delimited_factor(
                 tokens,
                 i,
@@ -189,7 +249,7 @@ def _parse_delimited_factor(
     left = tokens[i].string
     i += 1
     if left == "{":
-        negated = i < len(tokens) and tokens[i].kind == "caret_operator"
+        negated = i < len(tokens) and tokens[i] == RegexSymbols.CARET
         if negated:
             i += 1
         factors, i = _parse_factor_sequence(
@@ -199,7 +259,7 @@ def _parse_delimited_factor(
         )
         inner = pynini.union(*factors)
         if negated:
-            inner = pynini.difference(get_sigma(registry.tokens), inner)
+            inner = pynini.difference(get_sigma(registry[Token.__name__]), inner)
         expected = "}"
     elif left == "(":
         inner, i = _parse_expression(
@@ -220,19 +280,18 @@ def _parse_term(
     i: int,
     registry: RegistryType,
 ) -> tuple[pynini.Fst, int]:
-    if tokens[i].kind in ("right_delimiter", "pipe_operator"):
-        raise ValueError(f"Unexpected {tokens[i].kind!r} token at start of term")
+    if tokens[i] in RIGHT_DELIMITERS + (RegexSymbols.UNION,):
+        raise ValueError(f"Unexpected {tokens[i]!r} token at start of term")
     fsas: list[pynini.Fst] = []
-    while i < len(tokens) and tokens[i].kind not in (
-        "right_delimiter",
-        "pipe_operator",
+    while i < len(tokens) and tokens[i] not in (
+        RIGHT_DELIMITERS + (RegexSymbols.UNION,),
     ):
         factor_list, i = _parse_factor_sequence(
             tokens,
             i,
             registry,
         )
-        if i < len(tokens) and tokens[i].kind == "unary_operator":
+        if i < len(tokens) and tokens[i] in UNARY_OPERATORS:
             if not factor_list:
                 raise ValueError("Unary operator with no preceding factor")
             factor_list[-1] = _interpret_unary_operator(
@@ -255,11 +314,11 @@ def _parse_expression(
 ) -> tuple[pynini.Fst, int]:
     term, i = _parse_term(tokens, i, registry)
     terms = [term]
-    while i < len(tokens) and tokens[i].kind == "pipe_operator":
+    while i < len(tokens) and tokens[i] == RegexSymbols.UNION:
         i += 1
         t, i = _parse_term(tokens, i, registry)
         terms.append(t)
-        if i >= len(tokens) or tokens[i].kind == "right_delimiter":
+        if i >= len(tokens) or tokens[i] in RIGHT_DELIMITERS:
             break
     return pynini.union(*terms), i
 
@@ -282,7 +341,7 @@ def _parse_pattern(
     pattern_str: str,
     registry: RegistryType,
 ) -> pynini.Fst:
-    sym_table = symbol_table_for_tokens(registry.tokens)
+    sym_table = symbol_table_for_tokens(registry[Token.__name__])
     if not pattern_str:
         return pynini.accep("", token_type=sym_table)
     toks = tokenize_str(pattern_str, registry)
@@ -312,7 +371,7 @@ def decode_labels(
     label_iter,
     registry: RegistryType,
 ) -> str:
-    sym_table = symbol_table_for_tokens(registry.tokens)
+    sym_table = symbol_table_for_tokens(registry[Token.__name__])
     word = ""
     for label in label_iter:
         if label == 0:

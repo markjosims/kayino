@@ -48,19 +48,18 @@ def _validate_pattern_compiles(
         fsa(getattr(struct, field), registry)
     except Exception as error:
         raise FsaCompilationError(
-            f"Pattern string {getattr(struct, field)} could be compiled "
+            f"Pattern string {getattr(struct, field)} could not be compiled "
             "to an FSA, original error: " + str(error)
         )
 
 
-_struct_validation_hooks: StructHookType = {
-    Pattern.__name__: [
-        functools.partial(
-            _validate_pattern_compiles,
-            field="value",
-        ),
-    ]
-}
+_struct_validation_hooks: StructHookType = defaultdict(list)
+_struct_validation_hooks[Pattern.__name__].append(
+    functools.partial(
+        _validate_pattern_compiles,
+        field="value",
+    ),
+)
 
 
 def validate_stuct(
@@ -90,10 +89,10 @@ class MalformedStructArrayError(Exception):
 
 def _array_ids_contiguous(
     struct_type_name: str,
-    id_field: str,
+    field: str,
     registry: RegistryType,
 ):
-    id_array = [getattr(struct, id_field) for struct in registry[struct_type_name]]
+    id_array = [getattr(struct, field) for struct in registry[struct_type_name]]
     if id_array != list(range(len(id_array))):
         raise MalformedStructArrayError
 
@@ -104,7 +103,7 @@ def _array_ids_unique(
     registry: RegistryType,
 ):
     id_array = [getattr(struct, field) for struct in registry[struct_type_name]]
-    if len(id_array) != list(set(id_array)):
+    if len(id_array) != len(set(id_array)):
         raise MalformedStructArrayError
 
 
@@ -153,9 +152,8 @@ def _get_available_key(
     return len(registry[struct_type_name])
 
 
-_construction_hooks: KeyedStructHookType = {
-    Token.__name__: {"id": _get_available_key},
-}
+_construction_hooks: KeyedStructHookType = defaultdict(dict)
+_construction_hooks[Token.__name__]["id"] = _get_available_key
 
 
 def construct_fields(struct_type_name: str, registry: RegistryType, **kwargs) -> dict:
@@ -172,7 +170,7 @@ def construct_fields(struct_type_name: str, registry: RegistryType, **kwargs) ->
 def build_struct(struct_type_name: str, registry: RegistryType, **kwargs) -> object:
     kwargs = construct_fields(struct_type_name, registry, **kwargs)
     struct_type = NAME_TO_STRUCT[struct_type_name]
-    struct = structure(struct_type, kwargs)
+    struct = structure(kwargs, struct_type)
     validate_stuct(struct, registry)
     return struct
 
@@ -294,7 +292,7 @@ def register_struct(
     Returns the mutated registry.
     """
     registry[type(struct).__name__].append(struct)
-    validate_structs_in_registry(struct.__name__, registry)
+    validate_structs_in_registry(type(struct).__name__, registry)
     return registry
 
 
@@ -319,3 +317,43 @@ def remove_struct(
         func(struct_type_name, registry)
     validate_structs_in_registry(struct_type_name, registry)
     return registry
+
+
+"""
+# Retrieval functions
+"""
+
+
+def fetch_struct(
+    struct_type_name: str,
+    field: str,
+    value: object,
+    registry: RegistryType,
+) -> object:
+    """
+    Fetch a struct whose field matches the specified value (e.g.
+    an id or other unique identifier). Raises a ValueError if multiple
+    such structrs are found.
+    """
+    filtered = filter_structs(struct_type_name, field, value, registry)
+    if len(filtered) > 1:
+        raise ValueError(
+            f"Expected only one struct with {field}={value} but got {filtered}"
+        )
+    if not filtered:
+        raise KeyError(f"No struct with {field}={value}")
+
+    return filtered[0]
+
+
+def filter_structs(
+    struct_type_name: str,
+    field: str,
+    value: object,
+    registry: RegistryType,
+) -> list[object]:
+    return [
+        struct
+        for struct in registry[struct_type_name]
+        if getattr(struct, field) == value
+    ]

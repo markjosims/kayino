@@ -7,8 +7,8 @@ are OOV.
 
 import re
 from collections import defaultdict
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 import prompt_toolkit
 import pynini
@@ -34,7 +34,7 @@ from kayino.models import (
     Token,
     TokenGroup,
 )
-from kayino.structs import build_struct, register_struct
+from kayino.structs import FsaCompilationError, build_struct, register_struct
 
 _state_cache_dir = Path(".cache")
 _state_cache_dir.mkdir(exist_ok=True)
@@ -73,35 +73,21 @@ INPUT_STYLES = {
 
 """
 ## Command parsing grammar
+TODO: this is getting kinda beefy. Might wanna move to its own submodule.
 """
-
-struct_builder_patterns = {
-    Token.__name__: r"(?P<string>\w+)",
-    Pattern.__name__: r"(?P<string>\w+) \s+ (?P<value>\w+)",
-    TokenGroup.__name__: r"(?P<string>\w+) (?P<idlist>[\d\s]+)",
-    MappingNorm.__name__: r'(?P<name>\w+) \s+ (?P<description>"[^"]+"\s+) '
-    "(?P<relations>(\w+\s+>\w+\s+)+)",
-    CdrewriteNorm.__name__: r'(?P<input_str>\w+|"") \s+ (?P<output_str>\w+|"")'
-    " (?:\s+L:(?P<left_context>\w+))? (?:\s+R:(?P<right_context>\w+))?",
-}
-
-struct_builder_arg_template = (
-    "((?P<verb>add) \s+ (?P<struct>{struct}) \s+ {struct_args})"
-)
-
-struct_name_to_shorthands = defaultdict(list)
+_struct_name_to_shorthands = defaultdict(list)
 
 for struct_name in NAME_TO_STRUCT.keys():
-    struct_name_to_shorthands[struct_name].append(struct_name.lower())
+    _struct_name_to_shorthands[struct_name].append(struct_name.lower())
 
-struct_name_to_shorthands[Token.__name__].append("tok")
-struct_name_to_shorthands[TokenGroup.__name__].append("tkg")
-struct_name_to_shorthands[Pattern.__name__].append("pat")
-struct_name_to_shorthands[MappingNorm.__name__].append("map")
-struct_name_to_shorthands[CdrewriteNorm.__name__].append("rwr")
+_struct_name_to_shorthands[Token.__name__].append("tok")
+_struct_name_to_shorthands[TokenGroup.__name__].append("tkg")
+_struct_name_to_shorthands[Pattern.__name__].append("pat")
+_struct_name_to_shorthands[MappingNorm.__name__].append("map")
+_struct_name_to_shorthands[CdrewriteNorm.__name__].append("rwr")
 
-shorthand_to_struct_name = {
-    s: k for k, v in struct_name_to_shorthands.items() for s in v
+_shorthand_to_struct_name = {
+    s: k for k, v in _struct_name_to_shorthands.items() for s in v
 }
 
 
@@ -109,23 +95,77 @@ def _regex_union(words: Sequence[str]) -> str:
     return "|".join(words)
 
 
+_all_struct_names = []
+for struct_type_name, shorthands in _struct_name_to_shorthands.items():
+    _all_struct_names.extend(shorthands + [struct_type_name])
+_all_struct_regex = _regex_union(_all_struct_names)
+
+
+_struct_builder_patterns = {
+    Token.__name__: r"(?P<string>\w+)",
+    Pattern.__name__: r"(?P<string>\w+) \s+ (?P<value>\w+)",
+    TokenGroup.__name__: r"(?P<string>\w+) (?P<idlist>[\d\s]+)",
+    MappingNorm.__name__: r'(?P<name>\w+) \s+ (?P<description>"[^"]+"\s+) '
+    r"(?P<relations>(\w+\s+>\w+\s+)+)",
+    CdrewriteNorm.__name__: r'(?P<input_str>\w+|"") \s+ (?P<output_str>\w+|"")'
+    r" (\s+L:(?P<left_context>\w+))? (\s+R:(?P<right_context>\w+))?",
+}
+
+_struct_builder_arg_template = (
+    r"((?P<verb>add) \s+ (?P<struct>{struct}) \s+ {struct_args})"
+)
 _add_struct_patterns = []
 
-for struct_type_name, pattern in struct_builder_patterns.items():
-    shorthand_list = _regex_union(struct_name_to_shorthands[struct_type_name])
+for struct_type_name, pattern in _struct_builder_patterns.items():
+    shorthand_list = _regex_union(
+        _struct_name_to_shorthands[struct_type_name] + [struct_type_name]
+    )
     _add_struct_patterns.append(
-        struct_builder_arg_template.format(
+        _struct_builder_arg_template.format(
             struct=shorthand_list,
             struct_args=pattern,
         )
     )
 
 _add_struct_str = _regex_union(_add_struct_patterns)
-breakpoint()
+
+_list_struct_str = r"((?P<verb>l(ist)?) \s+ (?P<struct>{struct}))".format(
+    struct=_all_struct_regex
+)
+
+_struct_builder_arg_template = (
+    r"((?P<verb>add) \s+ (?P<struct>{struct}) \s+ {struct_args})"
+)
+_struct_removal_patterns = {
+    Token.__name__: r"(?P<string>[^\d]+)?(?P<id>\d+)?",
+    Pattern.__name__: r"(?P<string>\w+)",
+    TokenGroup.__name__: r"(?P<string>\w+)",
+    MappingNorm.__name__: r"(?P<name>\w+)",
+    CdrewriteNorm.__name__: r"(?P<index>\d)",
+}
+
+for struct_type_name, pattern in _struct_removal_patterns.items():
+    shorthand_list = _regex_union(
+        _struct_name_to_shorthands[struct_type_name] + [struct_type_name]
+    )
+    _add_struct_patterns.append(
+        _struct_builder_arg_template.format(
+            struct=shorthand_list,
+            struct_args=pattern,
+        )
+    )
 
 
 def _create_grammar():
-    return compile(_add_struct_str)
+    return compile(
+        _regex_union(
+            (
+                _add_struct_str,
+                _list_struct_str,
+                _remove_struct_str,
+            )
+        )
+    )
 
 
 def _prepare_add_kwargs(struct_type_name: str, kwargs: dict):
@@ -135,7 +175,7 @@ def _prepare_add_kwargs(struct_type_name: str, kwargs: dict):
         members = list(members)
         kwargs["members"] = members
     elif struct_type_name == MappingNorm.__name__:
-        pairs = re.findall("(\w+)\s+(\w+)", kwargs.pop("relations"))
+        pairs = re.findall(r"(\w+)\s+(\w+)", kwargs.pop("relations"))
         data = dict(pairs)
         kwargs["data"] = data
         kwargs["kind"] = "mapping"
@@ -153,13 +193,24 @@ def _prepare_add_kwargs(struct_type_name: str, kwargs: dict):
     return kwargs
 
 
-def handle_add(match, state: ReplState) -> tuple[str, ReplState]:
-    kwargs = match.variables()
-    struct_shorthand = kwargs["struct"]
-    struct_type_name = shorthand_to_struct_name.get(
+def _kwargs_from_match(match) -> dict:
+    kwargs = {kwarg.varname: kwarg.value for kwarg in match.variables()}
+    return kwargs
+
+
+def _pop_struct_type_name_from_kwargs(kwargs: dict) -> tuple[str, dict]:
+    struct_shorthand = kwargs.pop("struct")
+    struct_type_name = _shorthand_to_struct_name.get(
         struct_shorthand,
         struct_shorthand,
     )
+    return struct_type_name, kwargs
+
+
+def handle_add(match, state: ReplState) -> tuple[str, ReplState]:
+    kwargs = _kwargs_from_match(match)
+    struct_type_name, kwargs = _pop_struct_type_name_from_kwargs(kwargs)
+
     struct_kwargs = _prepare_add_kwargs(struct_type_name, kwargs)
     struct = build_struct(
         struct_type_name=struct_type_name,
@@ -175,21 +226,9 @@ def handle_add(match, state: ReplState) -> tuple[str, ReplState]:
 
 
 def handle_list(match, state: ReplState) -> tuple[str, ReplState]:
-    token_table = tabulate(
-        ((token.string, token.id) for token in state.registry.tokens),
-        headers=("token", "id"),
-        tablefmt="github",
-    )
-    group_table = tabulate(
-        (
-            (group.string, get_group_members(group, state.registry))
-            for group in state.registry[TokenGroup.__name__]
-        ),
-        headers=("group_id", "members"),
-        tablefmt="github",
-    )
-    tables = f"Tokens:\n{token_table}\nToken groups:\n{group_table}"
-    return tables, state
+    kwargs = _kwargs_from_match(match)
+    struct_type_name, kwargs = _pop_struct_type_name_from_kwargs(kwargs)
+    return str(state.registry[struct_type_name]), state
 
 
 _token_separator = (TOKEN_STYLES["separator"], ":")
@@ -236,7 +275,7 @@ _verb_to_func = {
 }
 
 
-def handle_user_response(
+def repl_turn(
     user_response: str,
     state: ReplState,
     grammar: _CompiledGrammar,
@@ -245,7 +284,10 @@ def handle_user_response(
     if not match:
         return "Could not parse command!", state
     verb = match.variables()["verb"]
-    return _verb_to_func[verb](match, state)
+    try:
+        return _verb_to_func[verb](match, state)
+    except FsaCompilationError as e:
+        return f"Could not compile FSA! {e}", state
 
 
 def repl():
@@ -265,7 +307,7 @@ def repl():
     completer = GrammarCompleter(
         grammar,
         {
-            "verb": WordCompleter(_unary_verbs + _binary_verbs + _argless_verbs),
+            "verb": WordCompleter(["add"]),
         },
     )
     input_style = Style.from_dict(INPUT_STYLES)
@@ -283,7 +325,7 @@ def repl():
         except EOFError:
             break
         else:
-            system_response, state = handle_user_response(
+            system_response, state = repl_turn(
                 user_response,
                 state,
                 grammar,
