@@ -7,33 +7,28 @@ are OOV.
 
 import re
 from collections import defaultdict
-from collections.abc import Sequence
 from pathlib import Path
 
 import prompt_toolkit
-import pynini
-from attrs import Factory, define, evolve, field, frozen
-from frozendict import frozendict
+from attrs import Factory, define
 from prompt_toolkit.completion import WordCompleter
-from prompt_toolkit.contrib.regular_languages.compiler import _CompiledGrammar, compile
+from prompt_toolkit.contrib.regular_languages.compiler import _CompiledGrammar
 from prompt_toolkit.contrib.regular_languages.completion import GrammarCompleter
 from prompt_toolkit.contrib.regular_languages.lexer import GrammarLexer
 from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.lexers import SimpleLexer
 from prompt_toolkit.styles import Style
-from tabulate import tabulate
 
 from kayino.acceptor import tokenize_str
 from kayino.models import (
-    NAME_TO_STRUCT,
     CdrewriteNorm,
     MappingNorm,
-    Pattern,
     RegexSymbols,
     RegistryType,
     Token,
     TokenGroup,
 )
+from kayino.repl.grammar import create_grammar
 from kayino.structs import FsaCompilationError, build_struct, register_struct
 
 _state_cache_dir = Path(".cache")
@@ -70,102 +65,6 @@ INPUT_STYLES = {
     "verb": f"{_green} bold",
     "arg": _white,
 }
-
-"""
-## Command parsing grammar
-TODO: this is getting kinda beefy. Might wanna move to its own submodule.
-"""
-_struct_name_to_shorthands = defaultdict(list)
-
-for struct_name in NAME_TO_STRUCT.keys():
-    _struct_name_to_shorthands[struct_name].append(struct_name.lower())
-
-_struct_name_to_shorthands[Token.__name__].append("tok")
-_struct_name_to_shorthands[TokenGroup.__name__].append("tkg")
-_struct_name_to_shorthands[Pattern.__name__].append("pat")
-_struct_name_to_shorthands[MappingNorm.__name__].append("map")
-_struct_name_to_shorthands[CdrewriteNorm.__name__].append("rwr")
-
-_shorthand_to_struct_name = {
-    s: k for k, v in _struct_name_to_shorthands.items() for s in v
-}
-
-
-def _regex_union(words: Sequence[str]) -> str:
-    return "|".join(words)
-
-
-_all_struct_names = []
-for struct_type_name, shorthands in _struct_name_to_shorthands.items():
-    _all_struct_names.extend(shorthands + [struct_type_name])
-_all_struct_regex = _regex_union(_all_struct_names)
-
-
-_struct_builder_patterns = {
-    Token.__name__: r"(?P<string>\w+)",
-    Pattern.__name__: r"(?P<string>\w+) \s+ (?P<value>\w+)",
-    TokenGroup.__name__: r"(?P<string>\w+) (?P<idlist>[\d\s]+)",
-    MappingNorm.__name__: r'(?P<name>\w+) \s+ (?P<description>"[^"]+"\s+) '
-    r"(?P<relations>(\w+\s+>\w+\s+)+)",
-    CdrewriteNorm.__name__: r'(?P<input_str>\w+|"") \s+ (?P<output_str>\w+|"")'
-    r" (\s+L:(?P<left_context>\w+))? (\s+R:(?P<right_context>\w+))?",
-}
-
-_struct_builder_arg_template = (
-    r"((?P<verb>add) \s+ (?P<struct>{struct}) \s+ {struct_args})"
-)
-_add_struct_patterns = []
-
-for struct_type_name, pattern in _struct_builder_patterns.items():
-    shorthand_list = _regex_union(
-        _struct_name_to_shorthands[struct_type_name] + [struct_type_name]
-    )
-    _add_struct_patterns.append(
-        _struct_builder_arg_template.format(
-            struct=shorthand_list,
-            struct_args=pattern,
-        )
-    )
-
-_add_struct_str = _regex_union(_add_struct_patterns)
-
-_list_struct_str = r"((?P<verb>l(ist)?) \s+ (?P<struct>{struct}))".format(
-    struct=_all_struct_regex
-)
-
-_struct_builder_arg_template = (
-    r"((?P<verb>add) \s+ (?P<struct>{struct}) \s+ {struct_args})"
-)
-_struct_removal_patterns = {
-    Token.__name__: r"(?P<string>[^\d]+)?(?P<id>\d+)?",
-    Pattern.__name__: r"(?P<string>\w+)",
-    TokenGroup.__name__: r"(?P<string>\w+)",
-    MappingNorm.__name__: r"(?P<name>\w+)",
-    CdrewriteNorm.__name__: r"(?P<index>\d)",
-}
-
-for struct_type_name, pattern in _struct_removal_patterns.items():
-    shorthand_list = _regex_union(
-        _struct_name_to_shorthands[struct_type_name] + [struct_type_name]
-    )
-    _add_struct_patterns.append(
-        _struct_builder_arg_template.format(
-            struct=shorthand_list,
-            struct_args=pattern,
-        )
-    )
-
-
-def _create_grammar():
-    return compile(
-        _regex_union(
-            (
-                _add_struct_str,
-                _list_struct_str,
-                _remove_struct_str,
-            )
-        )
-    )
 
 
 def _prepare_add_kwargs(struct_type_name: str, kwargs: dict):
@@ -294,7 +193,7 @@ def repl():
     session = prompt_toolkit.PromptSession()
     state = ReplState()
 
-    grammar = _create_grammar()
+    grammar = create_grammar()
 
     lexer = GrammarLexer(
         grammar,

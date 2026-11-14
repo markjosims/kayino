@@ -1,4 +1,4 @@
-from kayino.repl import repl
+from kayino.repl.app import repl
 
 
 def main() -> None:

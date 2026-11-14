@@ -150,6 +150,9 @@ NAME_TO_STRUCT = {
         TokenGroup,
         Pattern,
         NormStep,
+        PrebuiltNorm,
+        MappingNorm,
+        CdrewriteNorm,
         NormalizationSpec,
     ]
 }
