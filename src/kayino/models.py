@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from enum import Enum
 from typing import Literal
 
@@ -136,8 +137,41 @@ class NormalizationSpec:
 
 
 # Status indicating whether a string conforms to the constraints
-# defined by
+# defined by a normalization spec
 NormalizationStatus = Literal["licit", "illicit_token", "illicit_pattern"]
+
+"""
+### Text
+
+String data, serves as inputs and outputs of Kayino normalizers.
+"""
+
+TextSource = Literal["user", "file"]
+
+
+@frozen
+class Text:
+    """
+    A raw (unnormalized) string with metadata about provenance.
+    """
+
+    string: str
+    id: int
+    source_type: TextSource = "user"
+    source_value: str = Factory(lambda: str(datetime.now()))
+
+
+@frozen
+class NormalizedText:
+    """
+    The output of some normalization spec and a status value.
+    """
+
+    string: str
+    text_id: int
+    spec_name: str
+    status: NormalizationStatus
+
 
 """
 ## Name->type mapping for all structs
@@ -154,6 +188,8 @@ NAME_TO_STRUCT = {
         MappingNorm,
         CdrewriteNorm,
         NormalizationSpec,
+        Text,
+        NormalizedText,
     ]
 }
 

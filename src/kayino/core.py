@@ -1,7 +1,8 @@
 import re
-from typing import Mapping, Sequence
+from collections.abc import Mapping, Sequence
 
 import pynini
+from pynini.lib.rewrite import lattice_to_one_top_string
 
 from kayino.models import (
     CdrewriteArgs,
@@ -61,29 +62,15 @@ def apply_cdrewrite(
         r=cdrewrite_args.right_context,
         sigma_star=byte_star,
     )
-
-
-_licit_flag = "[licit:]"
-
-
-def find_illicit_tokens(
-    text: str,
-    token_set: Mapping[str, str],
-) -> tuple[str, ...] | None:
-    if not token_set:
-        return False
-    token_regex = sorted_intab_regex(token_set.values())
-    licit_marked = token_regex.sub(lambda _: _licit_flag, text)
-    remaining_tokens = licit_marked.split(_licit_flag)
-    remaining_tokens = filter(bool, remaining_tokens)
-    remaining_tokens = tuple(remaining_tokens)
-    return remaining_tokens or None
+    result = lattice_to_one_top_string(text @ rewrite_fst)
+    return result
 
 
 def test_fits_patterns(
     text: str,
     patterns: Mapping[str, str],
 ) -> tuple[str, ...] | None:
+    # TODO: use pynini fsas instead of regexes
     valid_patterns = []
     for key, pattern in patterns.items():
         if re.fullmatch(pattern, text):
@@ -95,8 +82,9 @@ def normalize(
     text: str,
     spec: NormalizationSpec,
 ) -> tuple[str, NormalizationStatus, tuple[str, ...] | None]:
-    text = apply_prebuilt(text, spec.steps)
-    text = apply_mappings(text, spec.mappings)
+    for step in spec.steps:
+        text = apply_prebuilt(text, spec.steps)
+        text = apply_mappings(text, spec.mappings)
     status: NormalizationStatus = "licit"
     status_payload = None
     if status_payload := find_illicit_tokens(text, spec.token_set):

@@ -11,7 +11,7 @@ from attrs import evolve
 from cattrs import structure
 
 from kayino.acceptor import fsa
-from kayino.models import NAME_TO_STRUCT, Pattern, RegistryType, Token, TokenGroup
+from kayino.models import NAME_TO_STRUCT, Pattern, RegistryType, Text, Token, TokenGroup
 
 # struct name -> list of hooks
 type StructHookType = dict[str, list[callable]]
@@ -101,14 +101,24 @@ def _array_ids_unique(
     struct_type_name: str,
     field: str,
     registry: RegistryType,
+    all_struct_types_checked: list[str] | None = None,
 ):
-    id_array = [getattr(struct, field) for struct in registry[struct_type_name]]
+    if all_struct_types_checked is None:
+        id_array = [getattr(struct, field) for struct in registry[struct_type_name]]
+    else:
+        id_array = [
+            getattr(struct, field)
+            for checked_type in all_struct_types_checked
+            for struct in registry[checked_type]
+        ]
     if len(id_array) != len(set(id_array)):
         raise MalformedStructArrayError
 
 
 _registry_validation_hooks: StructHookType = defaultdict(list)
 
+# Token, TokenGroup and Pattern structs all require
+# unique "string" field
 for string_struct in [Token, TokenGroup, Pattern]:
     unique_string_func = functools.partial(
         _array_ids_unique,
@@ -144,7 +154,7 @@ existing field data for the struct being constructed.
 """
 
 
-def _get_available_key(
+def _get_available_consecutive_key(
     struct_type_name: str,
     registry: RegistryType,
     **_,
@@ -152,8 +162,17 @@ def _get_available_key(
     return len(registry[struct_type_name])
 
 
+def _get_available_nonconsecutive_key(
+    struct_type_name: str,
+    registry: RegistryType,
+    **_,
+) -> int:
+    return max((struct.id for struct in registry[struct_type_name]), default=0) + 1
+
+
 _construction_hooks: KeyedStructHookType = defaultdict(dict)
-_construction_hooks[Token.__name__]["id"] = _get_available_key
+_construction_hooks[Token.__name__]["id"] = _get_available_consecutive_key
+_construction_hooks[Text.__name__]["id"] = _get_available_nonconsecutive_key
 
 
 def construct_fields(struct_type_name: str, registry: RegistryType, **kwargs) -> dict:
@@ -176,7 +195,7 @@ def build_struct(struct_type_name: str, registry: RegistryType, **kwargs) -> obj
 
 
 """
-## Registry mutation hooks
+## Struct mutation hooks
 
 Hooks for updating a given field on a struct.
 Each field may define multiple types of mutations, hence the
@@ -219,7 +238,7 @@ _struct_mutation_hooks: MutationStructHookType = defaultdict(lambda: defaultdict
 
 _struct_mutation_hooks[TokenGroup.__name__]["members"] = {
     "append": _add_item_to_array,
-    "remove": _remove_item_from_array,
+    "pop": _remove_item_from_array,
 }
 
 
