@@ -9,9 +9,18 @@ from typing import Literal
 
 from attrs import evolve
 from cattrs import structure
+from frozendict import frozendict
 
 from kayino.acceptor import fsa
-from kayino.models import NAME_TO_STRUCT, Pattern, RegistryType, Text, Token, TokenGroup
+from kayino.models import (
+    NAME_TO_STRUCT,
+    NormalizationSpec,
+    Pattern,
+    Registry,
+    Text,
+    Token,
+    TokenGroup,
+)
 
 # struct name -> list of hooks
 type StructHookType = dict[str, list[callable]]
@@ -19,7 +28,7 @@ type StructHookType = dict[str, list[callable]]
 # struct name -> struct field -> single hook
 type KeyedStructHookType = dict[str, dict[str, callable]]
 
-# enumerate type for struct mutations
+# enumerated type for registry mutations
 type MutationType = Literal["update", "append", "remove"]
 
 # struct name -> struct field -> mutation type -> single hook
@@ -42,7 +51,7 @@ class FsaCompilationError(Exception):
 def _validate_pattern_compiles(
     struct: object,
     field: str,
-    registry: RegistryType,
+    registry: Registry,
 ):
     try:
         fsa(getattr(struct, field), registry)
@@ -64,7 +73,7 @@ _struct_validation_hooks[Pattern.__name__].append(
 
 def validate_stuct(
     struct: object,
-    registry: RegistryType,
+    registry: Registry,
 ):
     for validation_func in _struct_validation_hooks[type(struct).__name__]:
         validation_func(
@@ -90,7 +99,7 @@ class MalformedStructArrayError(Exception):
 def _array_ids_contiguous(
     struct_type_name: str,
     field: str,
-    registry: RegistryType,
+    registry: Registry,
 ):
     id_array = [getattr(struct, field) for struct in registry[struct_type_name]]
     if id_array != list(range(len(id_array))):
@@ -100,7 +109,7 @@ def _array_ids_contiguous(
 def _array_ids_unique(
     struct_type_name: str,
     field: str,
-    registry: RegistryType,
+    registry: Registry,
     all_struct_types_checked: list[str] | None = None,
 ):
     if all_struct_types_checked is None:
@@ -123,6 +132,11 @@ for string_struct in [Token, TokenGroup, Pattern]:
     unique_string_func = functools.partial(
         _array_ids_unique,
         field="string",
+        all_struct_types_checked=(
+            Token.__name__,
+            TokenGroup.__name__,
+            Pattern.__name__,
+        ),
     )
     _registry_validation_hooks[string_struct.__name__].append(unique_string_func)
 
@@ -135,7 +149,7 @@ _registry_validation_hooks[Token.__name__].append(
 
 def validate_structs_in_registry(
     struct_type_name: str,
-    registry: RegistryType,
+    registry: Registry,
 ):
     for validation_func in _registry_validation_hooks[struct_type_name]:
         validation_func(
@@ -156,7 +170,7 @@ existing field data for the struct being constructed.
 
 def _get_available_consecutive_key(
     struct_type_name: str,
-    registry: RegistryType,
+    registry: Registry,
     **_,
 ) -> int:
     return len(registry[struct_type_name])
@@ -164,7 +178,7 @@ def _get_available_consecutive_key(
 
 def _get_available_nonconsecutive_key(
     struct_type_name: str,
-    registry: RegistryType,
+    registry: Registry,
     **_,
 ) -> int:
     return max((struct.id for struct in registry[struct_type_name]), default=0) + 1
@@ -175,7 +189,7 @@ _construction_hooks[Token.__name__]["id"] = _get_available_consecutive_key
 _construction_hooks[Text.__name__]["id"] = _get_available_nonconsecutive_key
 
 
-def construct_fields(struct_type_name: str, registry: RegistryType, **kwargs) -> dict:
+def construct_fields(struct_type_name: str, registry: Registry, **kwargs) -> dict:
     for field, func in _construction_hooks[struct_type_name].items():
         value = func(
             struct_type_name,
@@ -186,7 +200,7 @@ def construct_fields(struct_type_name: str, registry: RegistryType, **kwargs) ->
     return kwargs
 
 
-def build_struct(struct_type_name: str, registry: RegistryType, **kwargs) -> object:
+def build_struct(struct_type_name: str, registry: Registry, **kwargs) -> object:
     kwargs = construct_fields(struct_type_name, registry, **kwargs)
     struct_type = NAME_TO_STRUCT[struct_type_name]
     struct = structure(kwargs, struct_type)
@@ -240,6 +254,14 @@ _struct_mutation_hooks[TokenGroup.__name__]["members"] = {
     "append": _add_item_to_array,
     "pop": _remove_item_from_array,
 }
+_struct_mutation_hooks[NormalizationSpec.__name__]["steps"] = {
+    "append": _add_item_to_array,
+    "pop": _remove_item_from_array,
+}
+_struct_mutation_hooks[NormalizationSpec.__name__]["licit_patterns"] = {
+    "append": _add_item_to_array,
+    "pop": _remove_item_from_array,
+}
 
 
 def mutate_struct(
@@ -281,12 +303,12 @@ and performs any necessary validation.
 def _reindex_tokens(
     struct_type_name: str,
     field: str,
-    registry: RegistryType,
-) -> RegistryType:
+    registry: Registry,
+) -> Registry:
     struct_array = registry[struct_type_name]
     reindexed = [evolve(struct, **{field: i}) for i, struct in enumerate(struct_array)]
-    registry[struct_type_name] = reindexed
-    return registry
+    new_registry = frozendict(**registry | {struct_type_name: reindexed})
+    return new_registry
 
 
 _post_remove_hooks: StructHookType = defaultdict(list)
@@ -299,9 +321,9 @@ _post_remove_hooks[Token.__name__].append(
 
 
 def register_struct(
-    registry: RegistryType,
     struct: object,
-) -> tuple[object, RegistryType]:
+    registry: Registry,
+) -> Registry:
     """
     Append `struct` to the appropriate list in the registry
     and runs any registry-level validation.
@@ -310,15 +332,18 @@ def register_struct(
 
     Returns the mutated registry.
     """
-    registry[type(struct).__name__].append(struct)
-    validate_structs_in_registry(type(struct).__name__, registry)
-    return registry
+    struct_type_name = type(struct).__name__
+    curr_struct_array = registry[struct_type_name]
+    new_struct_array = curr_struct_array + (struct,)
+    new_registry = frozendict(**registry | {struct_type_name: new_struct_array})
+    validate_structs_in_registry(struct_type_name, new_registry)
+    return new_registry
 
 
 def remove_struct(
     struct: object,
-    registry: RegistryType,
-) -> RegistryType:
+    registry: Registry,
+) -> Registry:
     """
     Remove `struct` from the appropriate list in the registry,
     applies any struct removal hooks if any, and runs any
@@ -328,13 +353,31 @@ def remove_struct(
     """
     struct_type_name = type(struct).__name__
     struct_array = registry[struct_type_name]
-    filtered_struct_array = [
+    filtered_struct_array = tuple(
         curr_struct for curr_struct in struct_array if struct != curr_struct
-    ]
-    registry[struct_type_name] = filtered_struct_array
+    )
+    new_registry = frozendict(**registry | {struct_type_name: filtered_struct_array})
     for func in _post_remove_hooks[struct_type_name]:
-        func(struct_type_name, registry)
-    validate_structs_in_registry(struct_type_name, registry)
+        new_registry = func(struct_type_name, new_registry)
+    validate_structs_in_registry(struct_type_name, new_registry)
+    return new_registry
+
+
+def update_struct(
+    old_struct: object,
+    new_struct: object,
+    registry: Registry,
+) -> Registry:
+    if type(old_struct) is not type(new_struct):
+        raise ValueError("Cannot update struct with struct of different type!")
+    registry = remove_struct(
+        struct=old_struct,
+        registry=registry,
+    )
+    registry = register_struct(
+        struct=new_struct,
+        registry=registry,
+    )
     return registry
 
 
@@ -347,7 +390,7 @@ def fetch_struct(
     struct_type_name: str,
     field: str,
     value: object,
-    registry: RegistryType,
+    registry: Registry,
 ) -> object:
     """
     Fetch a struct whose field matches the specified value (e.g.
@@ -369,7 +412,7 @@ def filter_structs(
     struct_type_name: str,
     field: str,
     value: object,
-    registry: RegistryType,
+    registry: Registry,
 ) -> list[object]:
     return [
         struct

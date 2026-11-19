@@ -15,7 +15,7 @@ which is implemented as a dictionary mapping the name of a struct
 type to an array of structs.
 """
 
-RegistryType = dict[str, list[object, ...]]
+Registry = frozendict[str, tuple[object, ...]]
 
 """
 ## Struct definitions
@@ -192,6 +192,11 @@ NAME_TO_STRUCT = {
         NormalizedText,
     ]
 }
+
+
+def init_registry() -> Registry:
+    return frozendict.fromkeys(NAME_TO_STRUCT, ())
+
 
 """
 ## Regex symbols

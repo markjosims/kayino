@@ -1,6 +1,4 @@
 """
-Functional FSA compilation for parC grammar.
-
 Compiles inventory + features into a pynini SymbolTable, builds a token map
 for pattern string tokenization, and compiles all patterns into pynini FSAs
 via recursive descent parsing.
@@ -26,7 +24,7 @@ from kayino.models import (
     AnonToken,
     Pattern,
     RegexSymbols,
-    RegistryType,
+    Registry,
     Token,
     TokenGroup,
 )
@@ -114,7 +112,7 @@ def get_sigma_star(token_array: Sequence[Token]) -> pynini.Fst:
 
 @registry_as_frozendict
 @lru_cache(maxsize=1)
-def _token_regex(registry: RegistryType) -> re.Pattern:
+def _token_regex(registry: Registry) -> re.Pattern:
     token_symbols = [
         token.string
         for token in registry.get(
@@ -170,7 +168,7 @@ def get_token_group_map(token_groups: Sequence[TokenGroup]) -> dict[int, Token]:
 
 def tokenize_str(
     pattern_str: str,
-    registry: RegistryType,
+    registry: Registry,
 ) -> tuple[Token | AnonToken]:
     token_regex = _token_regex(registry)
     token_map = get_token_string_map(registry[Token.__name__])
@@ -207,7 +205,7 @@ def _interpret_unary_operator(fst: pynini.Fst, op: str) -> pynini.Fst:
 
 def _atom_to_fst(
     token: Token | TokenGroup | AnonToken,
-    registry: RegistryType,
+    registry: Registry,
 ) -> pynini.Fst:
     sym_table = symbol_table_for_tokens(registry[Token.__name__])
     return pynini.accep(token.string, token_type=sym_table)
@@ -221,7 +219,7 @@ def _group_or_pattern_to_fst(token: TokenGroup) -> pynini.Fst:
 def _parse_factor_sequence(
     tokens: list[Token],
     i: int,
-    registry: RegistryType,
+    registry: Registry,
 ) -> tuple[list[pynini.Fst], int]:
     fsas: list[pynini.Fst] = []
     while i < len(tokens):
@@ -244,7 +242,7 @@ def _parse_factor_sequence(
 def _parse_delimited_factor(
     tokens: list[Token],
     i: int,
-    registry: RegistryType,
+    registry: Registry,
 ) -> tuple[pynini.Fst, int]:
     left = tokens[i].string
     i += 1
@@ -278,7 +276,7 @@ def _parse_delimited_factor(
 def _parse_term(
     tokens: list[Token],
     i: int,
-    registry: RegistryType,
+    registry: Registry,
 ) -> tuple[pynini.Fst, int]:
     if tokens[i] in RIGHT_DELIMITERS + (RegexSymbols.UNION,):
         raise ValueError(f"Unexpected {tokens[i]!r} token at start of term")
@@ -310,7 +308,7 @@ def _parse_term(
 def _parse_expression(
     tokens: list[Token],
     i: int,
-    registry: RegistryType,
+    registry: Registry,
 ) -> tuple[pynini.Fst, int]:
     term, i = _parse_term(tokens, i, registry)
     terms = [term]
@@ -325,7 +323,7 @@ def _parse_expression(
 
 def _parse_tokens(
     tokens: list[Token],
-    registry: RegistryType,
+    registry: Registry,
 ) -> pynini.Fst:
     fst, end = _parse_expression(
         tokens,
@@ -339,7 +337,7 @@ def _parse_tokens(
 
 def _parse_pattern(
     pattern_str: str,
-    registry: RegistryType,
+    registry: Registry,
 ) -> pynini.Fst:
     sym_table = symbol_table_for_tokens(registry[Token.__name__])
     if not pattern_str:
@@ -355,7 +353,7 @@ def _parse_pattern(
 """
 
 
-def fsa(pattern_str: str, registry: RegistryType) -> pynini.Fst:
+def fsa(pattern_str: str, registry: Registry) -> pynini.Fst:
     return _parse_pattern(
         pattern_str,
         registry,
@@ -369,7 +367,7 @@ def fsa(pattern_str: str, registry: RegistryType) -> pynini.Fst:
 
 def decode_labels(
     label_iter,
-    registry: RegistryType,
+    registry: Registry,
 ) -> str:
     sym_table = symbol_table_for_tokens(registry[Token.__name__])
     word = ""
@@ -383,7 +381,7 @@ def decode_labels(
 
 def fsm_strings_and_weights(
     fst: pynini.Fst,
-    registry: RegistryType,
+    registry: Registry,
     project: Literal["input", "output"] = "output",
     nshortest: int | None = MAX_OUTPUT_STRINGS,
     strip_word_edge_symbols: bool = False,
@@ -412,7 +410,7 @@ def fsm_strings_and_weights(
 
 def fsm_strings(
     fst: pynini.Fst,
-    registry: RegistryType,
+    registry: Registry,
     project: Literal["input", "output"] = "output",
     nshortest: int | None = MAX_OUTPUT_STRINGS,
     strip_word_edge_symbols: bool = False,
@@ -433,7 +431,7 @@ def fsm_strings(
 
 def fsm_string(
     fst: pynini.Fst,
-    registry: RegistryType,
+    registry: Registry,
     project: Literal["input", "output"] = "output",
     strip_word_edge_symbols: bool = False,
     strip_all_tags: bool = False,
@@ -454,7 +452,7 @@ def fsm_string(
 def filter_strings_by_pattern(
     input_fst: pynini.Fst,
     pattern_fst: pynini.Fst,
-    registry: RegistryType,
+    registry: Registry,
 ) -> list[str]:
     return fsm_strings(
         pynini.intersect(input_fst, pattern_fst).optimize(),

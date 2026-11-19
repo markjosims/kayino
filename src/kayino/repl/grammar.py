@@ -67,34 +67,55 @@ _word_or_quoted = r"(\"[^\"]+\"|\w+)"
 
 class ArgStrings(str, Enum):
     # single word
-    STRING = r"(?P<string>\w+)"
+    WORD = r"(?P<{arg_name}>\w+)"
+    # word or quoted string
+    STRING = rf"(?P<{{arg_name}}>{_word_or_quoted})"
     # list of whitespace-separated words, with an optional final word
     # lacking trailing whitespace
     # words may optionally be wrapped in quotation marks
-    STRING_LIST = rf"(?P<string_list>({_word_or_quoted}\s+)*({_word_or_quoted})?)"
-    # single word
-    VALUE = r"(?P<value>\w+)"
-    # single word with angle brackets
-    PATTERN_STRING = r"(?P<string><\w+>)"
+    STRING_LIST = rf"(?P<{{arg_name}}>({_word_or_quoted}\s+)*({_word_or_quoted})?)"
+    # angle-bracket wrapped word
+    PATTERN_WORD = r"(?P<{arg_name}><\w+>)"
     # digit sequence
-    INDEX = r"(?P<id>\d+)"
+    INDEX = r"(?P<{arg_name}>\d+)"
     # whitespace-delimited digit sequence
-    INDEX_LIST = r"(?P<id_list>[\d\s]+)"
-    # single word
-    NAME = r"(?P<name>\w+)"
+    INDEX_LIST = r"(?P<{arg_name}>[\d\s]+)"
     # freeform text (including empty string)
-    DESCRIPTION = r"(?P<description>.*)"
-    TEXT = r"(?P<text>.*)"
+    TEXT = r"(?P<{arg_name}>.*)"
     # sequence of word > word pairs separated by semicolons
     # the last of which does not need the semicolon
-    MAPPING = rf"(?P<mapping>({_word_or_quoted}\s+>\s+{_word_or_quoted}\s*;)*\s+({_word_or_quoted}\s+>\s+{_word_or_quoted})?)"
-    # CdrewriteNorm inputs/outputs are all single word or quoted strings
-    INPUT_STR = rf"(?P<input_str>{_word_or_quoted})"
-    OUTPUT_STR = rf"(?P<output_str>{_word_or_quoted})"
+    MAPPING = rf"(?P<{{arg_name}}>({_word_or_quoted}\s+>\s+{_word_or_quoted}\s*;)*\s+({_word_or_quoted}\s+>\s+{_word_or_quoted})?)"
     # Context strs have an L: and R: prefix.
-    LEFT_CONTEXT = rf"L:(?P<left_context>{_word_or_quoted})"
-    RIGHT_CONTEXT = rf"R:(?P<right_context>{_word_or_quoted})"
+    LEFT_CONTEXT = rf"L:(?P<{{arg_name}}>{_word_or_quoted})"
+    RIGHT_CONTEXT = rf"R:(?P<{{arg_name}}>{_word_or_quoted})"
 
+
+# ArgString + arg name combos
+_string_word = ArgStrings.WORD.value.format(arg_name="string")
+_name_word = ArgStrings.WORD.value.format(arg_name="name")
+_kind_word = ArgStrings.WORD.value.format(arg_name="kind")
+
+_pattern_string = ArgStrings.PATTERN_WORD.value.format(arg_name="string")
+
+# you see there are "strings" and then there are "string strings"
+_string_string = ArgStrings.STRING.value.format(arg_name="string")
+_value_string = ArgStrings.STRING.value.format(arg_name="value")
+_input_string = ArgStrings.STRING.value.format(arg_name="input_str")
+_output_string = ArgStrings.STRING.value.format(arg_name="output_str")
+
+_text = ArgStrings.TEXT.value.format(arg_name="text")
+_string_text = ArgStrings.TEXT.value.format(arg_name="text")
+_description = ArgStrings.TEXT.value.format(arg_name="description")
+
+_left_context = ArgStrings.LEFT_CONTEXT.value.format(arg_name="left_context")
+_right_context = ArgStrings.RIGHT_CONTEXT.value.format(arg_name="right_context")
+
+_index = ArgStrings.INDEX.value.format(arg_name="index")
+
+_string_list = ArgStrings.STRING_LIST.value.format(arg_name="string_list")
+_index_list = ArgStrings.INDEX_LIST.value.format(arg_name="string_list")
+
+_mapping = ArgStrings.MAPPING.value.format(arg_name="mapping")
 
 """
 ## Argword-specific parsing hooks
@@ -128,60 +149,117 @@ _argstring_parse_hooks: dict[str, callable] = {
 
 
 _struct_builder_patterns = {
-    Token.__name__: ArgStrings.STRING.value,
-    Pattern.__name__: f"({ArgStrings.PATTERN_STRING.value} \\s+ {ArgStrings.VALUE.value})",
-    TokenGroup.__name__: f"({ArgStrings.STRING.value} \\s+ ({ArgStrings.INDEX_LIST.value}|{ArgStrings.STRING_LIST.value}))",
-    MappingNorm.__name__: rf"{ArgStrings.NAME.value} \s+ {ArgStrings.MAPPING.value} \s+ {ArgStrings.DESCRIPTION.value}",
-    CdrewriteNorm.__name__: rf"({ArgStrings.INPUT_STR} \s+ {ArgStrings.OUTPUT_STR} "
-    rf"\s+ {ArgStrings.LEFT_CONTEXT.value}? \s+ {ArgStrings.RIGHT_CONTEXT.value}?)",
-    Text.__name__: ArgStrings.STRING.value,
-    NormalizationSpec.__name__: ArgStrings.NAME.value,
+    Token.__name__: _string_word,
+    Pattern.__name__: f"({_pattern_string} \\s+ {_value_string})",
+    TokenGroup.__name__: f"({_pattern_string} \\s+ ({_index_list}|{_string_list}))",
+    MappingNorm.__name__: rf"{_name_word} \s+ {_mapping} \s+ {_description}",
+    CdrewriteNorm.__name__: rf"({_input_string} \s+ {_output_string} "
+    rf"\s+ {_left_context}? \s+ {_right_context}?)",
+    Text.__name__: _string_text,
+    NormalizationSpec.__name__: _name_word,
 }
 
 _struct_removal_patterns = {
-    Token.__name__: rf"({ArgStrings.STRING.value}|{ArgStrings.INDEX.value})",
-    Pattern.__name__: rf"({ArgStrings.PATTERN_STRING.value}|{ArgStrings.INDEX.value})",
-    TokenGroup.__name__: rf"({ArgStrings.PATTERN_STRING.value}|{ArgStrings.INDEX.value})",
-    MappingNorm.__name__: rf"({ArgStrings.NAME.value}|{ArgStrings.INDEX.value})",
-    CdrewriteNorm.__name__: rf"({ArgStrings.NAME.value}|{ArgStrings.INDEX.value})",
-    Text.__name__: ArgStrings.INDEX.value,
-    NormalizationSpec.__name__: ArgStrings.NAME.value,
+    Token.__name__: rf"({_string_word}|{_index})",
+    Pattern.__name__: rf"({_pattern_string}|{_index})",
+    TokenGroup.__name__: rf"({_pattern_string}|{_index})",
+    MappingNorm.__name__: rf"({_name_word}|{_index})",
+    CdrewriteNorm.__name__: rf"({_name_word}|{_index})",
+    Text.__name__: _index,
+    NormalizationSpec.__name__: _name_word,
 }
 
-_command_templates = {
-    "add": r"((?P<verb>add) \s+ (?P<struct>{struct}) \s+ {struct_args})",
+"""
+### Simple commands
+
+REPL commands that do not need specific args per struct type
+"""
+
+_simple_command_templates = {
+    "read": rf"((?P<verb>read) \s+ {_text})",
+    "tokenize": rf"((?P<verb>tokenize|tkz) \s+ (?P<string>{_text}))",
+}
+
+"""
+### Struct commands
+
+REPL commands with a slot for specific args by struct type
+"""
+
+_struct_command_templates = {
+    "add": r"((?P<verb>add|a) \s+ (?P<struct>{struct}) \s+ {struct_args})",
     "remove": r"((?P<verb>remove|rm) \s+ (?P<struct>{struct}) \s+ {struct_args})",
     "list": r"((?P<verb>l(ist)?) \s+ (?P<struct>{struct}))",
-    "tokenize": rf"((?P<verb>tokenize|tkz) \s+ (?P<string>{ArgStrings.TEXT.value}))",
-    "read": rf"((?P<verb>read) \s+ {ArgStrings.TEXT.value})",
 }
-_command_patterns = {
+_struct_command_patterns = {
     "add": _struct_builder_patterns,
     "remove": _struct_removal_patterns,
 }
+
+"""
+### NormalizationSpec commands
+
+Special REPL commands specific to the NormalizationSpec struct
+"""
+
+_modify_spec_template = (
+    r"((?P<verb>spec) \s+ (?P<subverb>add|a|remove|rm) \s+ {field_args})"
+)
+_modify_spec_field_patterns = {
+    "steps": _name_word,
+    "licit_patterns": _text,
+}
+
+_activate_spec_template = (
+    rf"((?P<verb>spec) \s+ (?P<subverb>act(ivate)?) (\s+ {_name_word})?)"
+)
+
+"""
+### Special commands
+
+Dictionary aggregating all special command strs
+(so far only NormalizationSpec, more to come!)
+"""
+
+_special_command_templates = {
+    "spec": _regex_union(
+        (
+            _modify_spec_template,
+            _activate_spec_template,
+        )
+    ),
+}
+_special_command_patterns = {
+    "spec": _modify_spec_field_patterns,
+}
+
+
 _shorthand_to_command_name = {
     "tkz": "tokenize",
     "rm": "remove",
     "l": "list",
+    "a": "add",
+    "act": "activate",
 }
 
 
-def get_struct_command_regex(
+def format_command_regex(
     command_template: str,
-    struct_arg_patterns: dict[str, str] | None = None,
+    format_key: str,
+    patterns: dict[str, str] | None = None,
 ) -> str:
     """
     Generate a single regex string that defines the parsing logic for
     some REPL command.
 
     Args:
-      command_template:     A string with format slots {struct} and optionally
-                            {struct_args}.
-      struct_arg_patterns:  An optional dictionary mapping struct types to regex
-                            patterns for parsing the given command on that struct.
-                            If None, then assumes no struct-specific args and does
-                            not attempt to format the {struct_args} slot in the
-                            template string.
+      command_template: A string with format slots {struct} and optionally
+                        {struct_args}.
+      patterns:         An optional dictionary mapping struct types to regex
+                        patterns for parsing the given command on that struct.
+                        If None, then assumes no struct-specific args and does
+                        not attempt to format the {struct_args} slot in the
+                        template string.
     """
     command_patterns = []
     for struct_type_name in NAME_TO_STRUCT.keys():
@@ -189,9 +267,9 @@ def get_struct_command_regex(
             _struct_name_to_shorthands[struct_type_name] + [struct_type_name]
         )
         format_kwargs = {"struct": shorthand_list}
-        if struct_arg_patterns:
-            pattern = struct_arg_patterns.get(struct_type_name, "")
-            format_kwargs["struct_args"] = pattern
+        if patterns:
+            pattern = patterns.get(struct_type_name, "")
+            format_kwargs[format_key] = pattern
         command_patterns.append(command_template.format(**format_kwargs))
 
     command_str = _regex_union(command_patterns)
@@ -200,17 +278,27 @@ def get_struct_command_regex(
 
 def create_grammar() -> _CompiledGrammar:
     command_strs = []
-    for command, template in _command_templates.items():
-        patterns = _command_patterns.get(command, None)
-        if "struct" in template:
-            command_str = get_struct_command_regex(
+    for command, template in _simple_command_templates.items():
+        command_strs.append(template)
+    for command, template in _struct_command_templates.items():
+        patterns = _struct_command_patterns.get(command, None)
+        command_str = format_command_regex(
+            command_template=template,
+            format_key="struct_args",
+            patterns=patterns,
+        )
+        command_strs.append(command_str)
+    for command, template in _special_command_templates.items():
+        if patterns := _special_command_patterns.get(command, None):
+            command_str = format_command_regex(
                 command_template=template,
-                struct_arg_patterns=patterns,
+                format_key="field_args",
+                patterns=patterns,
             )
         else:
             command_str = template
-
         command_strs.append(command_str)
+
     grammar_str = _regex_union(command_strs)
     return compile(grammar_str)
 
@@ -234,6 +322,12 @@ def parse_command(
         )
     verb = match_kwargs.pop("verb")
     match_kwargs["verb"] = _shorthand_to_command_name.get(verb, verb)
+
+    if subverb := match_kwargs.pop("subverb", None):
+        match_kwargs["subverb"] = _shorthand_to_command_name.get(
+            subverb,
+            subverb,
+        )
     return match_kwargs
 
 
