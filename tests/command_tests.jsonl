@@ -1,3 +1,0 @@
-{"user_input":"add tok foo","expected_kwargs":{"verb":"add","struct":"Token","string":"foo"}} 
-{"user_input":"remove tok foo","expected_kwargs":{"verb":"remove","struct":"Token","string":"foo"}} 
-{"user_input":"remove tkg <foo>","expected_kwargs":{"verb":"remove","struct":"TokenGroup","string":"<foo>"}} 

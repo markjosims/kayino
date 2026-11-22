@@ -32,6 +32,5 @@ PREBUILT_NORMS["remove_punct"] = PrebuiltNorm(
     name="remove_punct",
     description="Remove all punctuation",
 )
-PREBUILT_NORM_FUNCS["remove_punct"] = lambda text: re.sub(
-    re.escape(punctuation), "", text
-)
+_punct_re = re.compile("[" + re.escape(punctuation) + "]")
+PREBUILT_NORM_FUNCS["remove_punct"] = functools.partial(_punct_re.sub, "")

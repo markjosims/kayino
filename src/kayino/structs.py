@@ -14,13 +14,21 @@ from frozendict import frozendict
 from kayino.acceptor import fsa
 from kayino.models import (
     NAME_TO_STRUCT,
+    TYPE_TO_UNION,
+    DuplicateStructError,
+    FsaCompilationError,
+    MalformedStructArrayError,
+    MappingNorm,
     NormalizationSpec,
+    NormStep,
     Pattern,
     Registry,
+    StructNotFoundError,
     Text,
     Token,
     TokenGroup,
 )
+from kayino.prebuilt import PREBUILT_NORMS
 
 # struct name -> list of hooks
 type StructHookType = dict[str, list[callable]]
@@ -42,10 +50,6 @@ Each hooks takes the newly constructed struct, the name
 of the field to validate, and the registry containing
 all existing structs.
 """
-
-
-class FsaCompilationError(Exception):
-    pass
 
 
 def _validate_pattern_compiles(
@@ -90,10 +94,6 @@ scope over all structs of a given type in the registry,
 and so take a struct_type_name argument rather than an instantiated
 struct.
 """
-
-
-class MalformedStructArrayError(Exception):
-    pass
 
 
 def _array_ids_contiguous(
@@ -184,13 +184,38 @@ def _get_available_nonconsecutive_key(
     return max((struct.id for struct in registry[struct_type_name]), default=0) + 1
 
 
-_construction_hooks: KeyedStructHookType = defaultdict(dict)
-_construction_hooks[Token.__name__]["id"] = _get_available_consecutive_key
-_construction_hooks[Text.__name__]["id"] = _get_available_nonconsecutive_key
+_field_hooks: KeyedStructHookType = defaultdict(dict)
+_field_hooks[Token.__name__]["id"] = _get_available_consecutive_key
+_field_hooks[Text.__name__]["id"] = _get_available_nonconsecutive_key
+_field_hooks[MappingNorm.__name__]["data"] = (
+    lambda struct_type_name, registry, **kwargs: frozendict(kwargs["data"])
+)
+
+
+def _rename_field(
+    old_field: str,
+    new_field: str,
+    **kwargs,
+) -> dict:
+    if old_field in kwargs:
+        if new_field in kwargs:
+            raise ValueError(
+                f"Expected one of {old_field}, {new_field} in kwargs, got both."
+            )
+        kwargs[new_field] = kwargs.pop(old_field)
+    return kwargs
+
+
+_construction_hooks: StructHookType = defaultdict(list)
+_construction_hooks[MappingNorm.__name__].append(
+    functools.partial(_rename_field, old_field="mapping", new_field="data")
+)
 
 
 def construct_fields(struct_type_name: str, registry: Registry, **kwargs) -> dict:
-    for field, func in _construction_hooks[struct_type_name].items():
+    for func in _construction_hooks[struct_type_name]:
+        kwargs = func(**kwargs)
+    for field, func in _field_hooks[struct_type_name].items():
         value = func(
             struct_type_name,
             registry,
@@ -228,8 +253,7 @@ def _add_item_to_array(
     """
     existing_array = getattr(struct, field)
     new_array = existing_array + (data,)
-    new_struct = evolve(struct, **{field: new_array})
-    return new_struct
+    return new_array
 
 
 def _remove_item_from_array(
@@ -243,8 +267,7 @@ def _remove_item_from_array(
     """
     existing_array = getattr(struct, field)
     new_array = tuple(curr_item for curr_item in existing_array if curr_item != data)
-    new_struct = evolve(struct, **{field: new_array})
-    return new_struct
+    return new_array
 
 
 # You'd better be ready for how default this dictionary is
@@ -333,6 +356,10 @@ def register_struct(
     Returns the mutated registry.
     """
     struct_type_name = type(struct).__name__
+    struct_type_name = TYPE_TO_UNION.get(
+        struct_type_name,
+        struct_type_name,
+    )
     curr_struct_array = registry[struct_type_name]
     new_struct_array = curr_struct_array + (struct,)
     new_registry = frozendict(**registry | {struct_type_name: new_struct_array})
@@ -399,11 +426,11 @@ def fetch_struct(
     """
     filtered = filter_structs(struct_type_name, field, value, registry)
     if len(filtered) > 1:
-        raise ValueError(
+        raise DuplicateStructError(
             f"Expected only one struct with {field}={value} but got {filtered}"
         )
     if not filtered:
-        raise KeyError(f"No struct with {field}={value}")
+        raise StructNotFoundError(f"No struct with {field}={value}")
 
     return filtered[0]
 
@@ -419,3 +446,16 @@ def filter_structs(
         for struct in registry[struct_type_name]
         if getattr(struct, field) == value
     ]
+
+
+"""
+## Registry initialization
+"""
+
+
+def init_registry() -> Registry:
+    registry = dict.fromkeys(NAME_TO_STRUCT, ())
+    prebuilt = tuple(PREBUILT_NORMS.values())
+    registry[NormStep.__name__] = prebuilt
+    registry = frozendict(registry)
+    return registry

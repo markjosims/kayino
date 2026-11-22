@@ -15,10 +15,10 @@ from kayino.repl.grammar import (
     parse_command,
 )
 
-ARGWORD_FILE = Path(__file__).parent / "argword_tests.jsonl"
+ARGWORD_FILE = Path(__file__).parent / "test_cases" / "argword_tests.jsonl"
 ARGWORDS = [json.loads(line) for line in ARGWORD_FILE.read_bytes().splitlines()]
 
-COMMAND_FILE = Path(__file__).parent / "command_tests.jsonl"
+COMMAND_FILE = Path(__file__).parent / "test_cases" / "command_tests.jsonl"
 COMMANDS = [json.loads(line) for line in COMMAND_FILE.read_bytes().splitlines()]
 
 
@@ -31,7 +31,10 @@ def test_argwords(argword_test):
     # cast inner lists to tuples as JSON does not have a tuple type
     if arg_word == "MAPPING":
         expected_value = list(map(tuple, expected_value))
-    result = re.match(ArgStrings[arg_word], user_input)
+    result = re.match(
+        ArgStrings[arg_word].format(arg_name=arg_key),
+        user_input,
+    )
     if expected_value is None:
         assert result is None
     else:
@@ -47,4 +50,12 @@ def test_commands(command_test):
     user_input = command_test["user_input"]
     expected_kwargs = command_test["expected_kwargs"]
     parsed = parse_command(user_input, grammar)
+
+    if expected_kwargs is None:
+        assert parsed == expected_kwargs
+        return
+
+    if mapping := expected_kwargs.pop("mapping", None):
+        expected_kwargs["mapping"] = list(map(tuple, mapping))
+
     assert expected_kwargs == parsed

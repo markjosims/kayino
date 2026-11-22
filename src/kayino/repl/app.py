@@ -28,10 +28,7 @@ def repl():
 
     lexer = GrammarLexer(
         grammar,
-        lexers={
-            "verb": SimpleLexer("class:verb"),
-            "arg": SimpleLexer("class:arg"),
-        },
+        lexers={key: SimpleLexer(f"class:{key}") for key in INPUT_STYLES.keys()},
     )
 
     completer = GrammarCompleter(

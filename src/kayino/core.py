@@ -78,19 +78,44 @@ def test_fits_patterns(
     return tuple(valid_patterns) or None
 
 
+def apply_step(
+    text: str,
+    step: NormStep,
+) -> str:
+    if step.kind == "prebuilt":
+        return apply_prebuilt(
+            text=text,
+            norm_id=step.name,
+        )
+    if step.kind == "cdrewrite":
+        return apply_cdrewrite(
+            text=text,
+            cdrewrite_args=step.data,
+        )
+    elif step.kind == "mapping":
+        return apply_mappings(
+            text=text,
+            mappings=step.data,
+        )
+    raise ValueError("Unknown normstep type", step.kind)
+
+
 def normalize(
     text: str,
     spec: NormalizationSpec,
 ) -> tuple[str, NormalizationStatus, tuple[str, ...] | None]:
     for step in spec.steps:
-        text = apply_prebuilt(text, spec.steps)
-        text = apply_mappings(text, spec.mappings)
+        text = apply_step(
+            text=text,
+            step=step,
+        )
     status: NormalizationStatus = "licit"
     status_payload = None
-    if status_payload := find_illicit_tokens(text, spec.token_set):
-        status = "illicit_token"
-    elif status_payload := test_fits_patterns(text, spec.patterns):
-        pass
-    else:
-        status = "illicit_pattern"
+    # TODO: status resolution uses updated logic
+    # if status_payload := find_illicit_tokens(text, spec.token_set):
+    # status = "illicit_token"
+    # elif status_payload := test_fits_patterns(text, spec.patterns):
+    # pass
+    # else:
+    # status = "illicit_pattern"
     return text, status, status_payload

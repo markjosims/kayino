@@ -5,6 +5,7 @@
 _white = "#ffffff"
 _green = "#33aa33"
 _red = "#ff0000"
+_orange = "#ffa500"
 _blue = "#0000ff"
 _purple = "#800080"
 _black = "#ffffff"
@@ -21,5 +22,12 @@ TOKEN_STYLES = {
 }
 INPUT_STYLES = {
     "verb": f"{_green} bold",
+    "subverb": f"{_blue} bold",
+    "struct": f"{_red}",
+    "field": f"{_orange}",
+    "input_str": f"{_orange}",
+    "output_str": f"{_purple}",
+    "name": f"{_blue} italic",
+    "index": f"{_yellow}",
     "arg": _white,
 }

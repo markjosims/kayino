@@ -14,6 +14,7 @@ from kayino.models import (
     CdrewriteNorm,
     MappingNorm,
     NormalizationSpec,
+    NormStep,
     Pattern,
     Text,
     Token,
@@ -34,6 +35,11 @@ _struct_name_to_shorthands[TokenGroup.__name__].append("tkg")
 _struct_name_to_shorthands[Pattern.__name__].append("pat")
 _struct_name_to_shorthands[MappingNorm.__name__].append("map")
 _struct_name_to_shorthands[CdrewriteNorm.__name__].append("rwr")
+_struct_name_to_shorthands[CdrewriteNorm.__name__].append("rule")
+_struct_name_to_shorthands[NormalizationSpec.__name__].append("normspec")
+_struct_name_to_shorthands[NormalizationSpec.__name__].append("spec")
+_struct_name_to_shorthands[NormStep.__name__].append("step")
+_struct_name_to_shorthands[NormStep.__name__].append("stp")
 
 _shorthand_to_struct_name = {
     s: k for k, v in _struct_name_to_shorthands.items() for s in v
@@ -82,9 +88,14 @@ class ArgStrings(str, Enum):
     INDEX_LIST = r"(?P<{arg_name}>[\d\s]+)"
     # freeform text (including empty string)
     TEXT = r"(?P<{arg_name}>.*)"
+    # quoted text (to prevent collision with other args)
+    QUOTED = r'(?P<{arg_name}>"[^\"]*")'
     # sequence of word > word pairs separated by semicolons
     # the last of which does not need the semicolon
-    MAPPING = rf"(?P<{{arg_name}}>({_word_or_quoted}\s+>\s+{_word_or_quoted}\s*;)*\s+({_word_or_quoted}\s+>\s+{_word_or_quoted})?)"
+    MAPPING = (
+        rf"(?P<{{arg_name}}>({_word_or_quoted}\s+>\s+{_word_or_quoted}\s*;\s+)*"
+        rf"({_word_or_quoted}\s+>\s+{_word_or_quoted};?)?)"
+    )
     # Context strs have an L: and R: prefix.
     LEFT_CONTEXT = rf"L:(?P<{{arg_name}}>{_word_or_quoted})"
     RIGHT_CONTEXT = rf"R:(?P<{{arg_name}}>{_word_or_quoted})"
@@ -104,8 +115,8 @@ _input_string = ArgStrings.STRING.value.format(arg_name="input_str")
 _output_string = ArgStrings.STRING.value.format(arg_name="output_str")
 
 _text = ArgStrings.TEXT.value.format(arg_name="text")
-_string_text = ArgStrings.TEXT.value.format(arg_name="text")
-_description = ArgStrings.TEXT.value.format(arg_name="description")
+_string_text = ArgStrings.TEXT.value.format(arg_name="string")
+_description = ArgStrings.QUOTED.value.format(arg_name="description")
 
 _left_context = ArgStrings.LEFT_CONTEXT.value.format(arg_name="left_context")
 _right_context = ArgStrings.RIGHT_CONTEXT.value.format(arg_name="right_context")
@@ -152,7 +163,7 @@ _struct_builder_patterns = {
     Token.__name__: _string_word,
     Pattern.__name__: f"({_pattern_string} \\s+ {_value_string})",
     TokenGroup.__name__: f"({_pattern_string} \\s+ ({_index_list}|{_string_list}))",
-    MappingNorm.__name__: rf"{_name_word} \s+ {_mapping} \s+ {_description}",
+    MappingNorm.__name__: rf"{_name_word} \s+ {_mapping} (\s+ {_description})?",
     CdrewriteNorm.__name__: rf"({_input_string} \s+ {_output_string} "
     rf"\s+ {_left_context}? \s+ {_right_context}?)",
     Text.__name__: _string_text,
@@ -178,6 +189,7 @@ REPL commands that do not need specific args per struct type
 _simple_command_templates = {
     "read": rf"((?P<verb>read) \s+ {_text})",
     "tokenize": rf"((?P<verb>tokenize|tkz) \s+ (?P<string>{_text}))",
+    "process": rf"((?P<verb>process|pro?c) \s+ (?P<string>{_text}))",
 }
 
 """
@@ -203,47 +215,78 @@ Special REPL commands specific to the NormalizationSpec struct
 """
 
 _modify_spec_template = (
-    r"((?P<verb>spec) \s+ (?P<subverb>add|a|remove|rm) \s+ {field_args})"
+    r"((?P<verb>spec) \s+ (?P<subverb>add|a|remove|rm)"
+    r"\s+ (?P<field>{field}) \s+ {field_args})"
 )
 _modify_spec_field_patterns = {
     "steps": _name_word,
     "licit_patterns": _text,
 }
-
+_modify_spec_field2shorthand = {
+    "steps": ["ste?p"],
+    "licit_patterns": ["pat(tern)?s?", "lp"],
+}
+_modify_spec_shorthand2field = {
+    "step": "steps",
+    "stp": "steps",
+    "patterns": "licit_patterns",
+    "pat": "licit_patterns",
+    "pats": "licit_patterns",
+    "lp": "licit_patterns",
+}
 _activate_spec_template = (
     rf"((?P<verb>spec) \s+ (?P<subverb>act(ivate)?) (\s+ {_name_word})?)"
 )
 
+
+def spec_command_str() -> str:
+    command_strs = []
+    for k, v in _modify_spec_field_patterns.items():
+        field_str = _regex_union(_modify_spec_field2shorthand.get(k, []) + [k])
+        command_strs.append(
+            _modify_spec_template.format(
+                **{
+                    "field": field_str,
+                    "field_args": v,
+                }
+            )
+        )
+    command_strs.append(_activate_spec_template)
+    return _regex_union(command_strs)
+
+
 """
 ### Special commands
 
-Dictionary aggregating all special command strs
+List aggregating all special command strs
 (so far only NormalizationSpec, more to come!)
 """
 
-_special_command_templates = {
-    "spec": _regex_union(
-        (
-            _modify_spec_template,
-            _activate_spec_template,
-        )
-    ),
-}
-_special_command_patterns = {
-    "spec": _modify_spec_field_patterns,
-}
+_special_command_strs = []
+_special_command_strs.append(spec_command_str())
 
+"""
+### Shorthands
+"""
 
 _shorthand_to_command_name = {
     "tkz": "tokenize",
+    "prc": "process",
+    "proc": "process",
     "rm": "remove",
     "l": "list",
     "a": "add",
     "act": "activate",
 }
 
+_shorthand_maps = {
+    "verb": _shorthand_to_command_name,
+    "subverb": _shorthand_to_command_name,
+    "field": _modify_spec_shorthand2field,
+}
 
-def format_command_regex(
+
+def populate_struct_command_template(
     command_template: str,
     format_key: str,
     patterns: dict[str, str] | None = None,
@@ -282,30 +325,29 @@ def create_grammar() -> _CompiledGrammar:
         command_strs.append(template)
     for command, template in _struct_command_templates.items():
         patterns = _struct_command_patterns.get(command, None)
-        command_str = format_command_regex(
+        command_str = populate_struct_command_template(
             command_template=template,
             format_key="struct_args",
             patterns=patterns,
         )
         command_strs.append(command_str)
-    for command, template in _special_command_templates.items():
-        if patterns := _special_command_patterns.get(command, None):
-            command_str = format_command_regex(
-                command_template=template,
-                format_key="field_args",
-                patterns=patterns,
-            )
-        else:
-            command_str = template
-        command_strs.append(command_str)
+    command_strs.extend(_special_command_strs)
 
     grammar_str = _regex_union(command_strs)
     return compile(grammar_str)
 
 
+def _normalize_user_response(text: str) -> str:
+    """
+    Normalization functions that apply to all user inputs
+    """
+    return text.strip()
+
+
 def parse_command(
     user_response: str, grammar: _CompiledGrammar
 ) -> dict[str, str] | None:
+    user_response = _normalize_user_response(user_response)
     match = grammar.match(user_response)
     if match is None:
         return
@@ -320,14 +362,9 @@ def parse_command(
             struct_kwarg,
             struct_kwarg,
         )
-    verb = match_kwargs.pop("verb")
-    match_kwargs["verb"] = _shorthand_to_command_name.get(verb, verb)
-
-    if subverb := match_kwargs.pop("subverb", None):
-        match_kwargs["subverb"] = _shorthand_to_command_name.get(
-            subverb,
-            subverb,
-        )
+    for key, shorthand_map in _shorthand_maps.items():
+        if value := match_kwargs.get(key, None):
+            match_kwargs[key] = shorthand_map.get(value, value)
     return match_kwargs
 
 

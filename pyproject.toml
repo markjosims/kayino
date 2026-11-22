@@ -12,6 +12,7 @@ dependencies = [
   "prompt-toolkit>=3.0.53",
   "pygments>=2.21.0",
   "pynini>=2.1.7",
+  "rich>=15.0.0",
   "tabulate>=0.10.0",
 ]
 

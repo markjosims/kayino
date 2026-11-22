@@ -3,3 +3,4 @@
 {"user_input":"foo bar baz","arg_word":"STRING_LIST", "arg_key": "string_list", "expected_value": ["foo", "bar", "baz"]}
 {"user_input":"foo \"bar baz\"","arg_word":"STRING_LIST", "arg_key": "string_list", "expected_value": ["foo", "bar baz"]}
 {"user_input":"foo > bar; baz > foo","arg_word":"MAPPING", "arg_key": "mapping", "expected_value": [["foo", "bar"], ["baz", "foo"]]}
+{"user_input":"foo > bar; baz > foo;","arg_word":"MAPPING", "arg_key": "mapping", "expected_value": [["foo", "bar"], ["baz", "foo"]]}

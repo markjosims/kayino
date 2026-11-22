@@ -1,0 +1,2 @@
+  {"text": "FoOO BARRr", "expected": "fooo barrr", "name": "lowercase"}
+  {"text": "foo?!?!? (bar&)*;", "expected": "foo bar", "name": "remove_punct"}

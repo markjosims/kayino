@@ -90,7 +90,7 @@ class MappingNorm:
     """
 
     name: str
-    data: frozendict[str, str]
+    data: frozendict[str, str] = Factory(frozendict)
     description: str = ""
     kind: Literal["mapping"] = "mapping"
 
@@ -194,9 +194,11 @@ NAME_TO_STRUCT = {
 }
 
 
-def init_registry() -> Registry:
-    return frozendict.fromkeys(NAME_TO_STRUCT, ())
-
+TYPE_TO_UNION = {
+    PrebuiltNorm.__name__: NormStep.__name__,
+    MappingNorm.__name__: NormStep.__name__,
+    CdrewriteNorm.__name__: NormStep.__name__,
+}
 
 """
 ## Regex symbols
@@ -232,3 +234,27 @@ UNARY_OPERATORS = (
     RegexSymbols.PLUS,
     RegexSymbols.OPTIONAL,
 )
+
+"""
+## Special error classes
+"""
+
+
+class KayinoError(Exception):
+    pass
+
+
+class DuplicateStructError(KayinoError):
+    pass
+
+
+class StructNotFoundError(KayinoError):
+    pass
+
+
+class MalformedStructArrayError(KayinoError):
+    pass
+
+
+class FsaCompilationError(KayinoError):
+    pass
