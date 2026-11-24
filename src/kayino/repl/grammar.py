@@ -4,7 +4,7 @@
 
 import re
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from enum import Enum
 
 from prompt_toolkit.contrib.regular_languages.compiler import _CompiledGrammar, compile
@@ -89,7 +89,7 @@ class ArgStrings(str, Enum):
     # freeform text (including empty string)
     TEXT = r"(?P<{arg_name}>.*)"
     # quoted text (to prevent collision with other args)
-    QUOTED = r'(?P<{arg_name}>"[^\"]*")'
+    QUOTED = r'"(?P<{arg_name}>[^\"]*)"'
     # sequence of word > word pairs separated by semicolons
     # the last of which does not need the semicolon
     MAPPING = (
@@ -106,7 +106,7 @@ _string_word = ArgStrings.WORD.value.format(arg_name="string")
 _name_word = ArgStrings.WORD.value.format(arg_name="name")
 _kind_word = ArgStrings.WORD.value.format(arg_name="kind")
 
-_pattern_string = ArgStrings.PATTERN_WORD.value.format(arg_name="string")
+_pattern_name = ArgStrings.PATTERN_WORD.value.format(arg_name="name")
 
 # you see there are "strings" and then there are "string strings"
 _string_string = ArgStrings.STRING.value.format(arg_name="string")
@@ -116,6 +116,8 @@ _output_string = ArgStrings.STRING.value.format(arg_name="output_str")
 
 _text = ArgStrings.TEXT.value.format(arg_name="text")
 _string_text = ArgStrings.TEXT.value.format(arg_name="string")
+
+_quoted_text = ArgStrings.QUOTED.value.format(arg_name="text")
 _description = ArgStrings.QUOTED.value.format(arg_name="description")
 
 _left_context = ArgStrings.LEFT_CONTEXT.value.format(arg_name="left_context")
@@ -150,19 +152,20 @@ def _parse_id_list(text: str) -> list[int]:
     return list(map(int, re.findall(r"\b(\d+)\b", text)))
 
 
-_argstring_parse_hooks: dict[str, callable] = {
+_argstring_parse_hooks: dict[str, Callable] = {
     "string_list": _parse_string_list,
     "id_list": _parse_id_list,
     "mapping": _parse_mapping,
     "left_context": lambda s: s.removeprefix("L:"),
     "right_context": lambda s: s.removeprefix("R:"),
+    "index": int,
 }
 
 
 _struct_builder_patterns = {
     Token.__name__: _string_word,
-    Pattern.__name__: f"({_pattern_string} \\s+ {_value_string})",
-    TokenGroup.__name__: f"({_pattern_string} \\s+ ({_index_list}|{_string_list}))",
+    Pattern.__name__: f"({_pattern_name} \\s+ {_value_string})",
+    TokenGroup.__name__: f"({_pattern_name} \\s+ ({_index_list}|{_string_list}))",
     MappingNorm.__name__: rf"{_name_word} \s+ {_mapping} (\s+ {_description})?",
     CdrewriteNorm.__name__: rf"({_input_string} \s+ {_output_string} "
     rf"\s+ {_left_context}? \s+ {_right_context}?)",
@@ -172,8 +175,8 @@ _struct_builder_patterns = {
 
 _struct_removal_patterns = {
     Token.__name__: rf"({_string_word}|{_index})",
-    Pattern.__name__: rf"({_pattern_string}|{_index})",
-    TokenGroup.__name__: rf"({_pattern_string}|{_index})",
+    Pattern.__name__: rf"({_pattern_name}|{_index})",
+    TokenGroup.__name__: rf"({_pattern_name}|{_index})",
     MappingNorm.__name__: rf"({_name_word}|{_index})",
     CdrewriteNorm.__name__: rf"({_name_word}|{_index})",
     Text.__name__: _index,
@@ -188,8 +191,8 @@ REPL commands that do not need specific args per struct type
 
 _simple_command_templates = {
     "read": rf"((?P<verb>read) \s+ {_text})",
-    "tokenize": rf"((?P<verb>tokenize|tkz) \s+ (?P<string>{_text}))",
-    "process": rf"((?P<verb>process|pro?c) \s+ (?P<string>{_text}))",
+    "tokenize": rf"((?P<verb>tokenize|tkz) \s+ ({_quoted_text}|{_index}))",
+    "process": rf"((?P<verb>process|pro?c) \s+ ({_quoted_text}|{_index}))",
 }
 
 """

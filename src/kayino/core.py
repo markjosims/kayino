@@ -1,5 +1,6 @@
 import re
 from collections.abc import Mapping, Sequence
+from os import wait
 
 import pynini
 from pynini.lib.rewrite import lattice_to_one_top_string
@@ -12,8 +13,10 @@ from kayino.models import (
     NormalizationStatus,
     NormStep,
     PrebuiltNorm,
+    Registry,
 )
 from kayino.prebuilt import PREBUILT_NORM_FUNCS, PREBUILT_NORMS
+from kayino.structs import fetch_struct
 
 byte_star = pynini.closure(pynini.string_map(""))
 
@@ -103,8 +106,15 @@ def apply_step(
 def normalize(
     text: str,
     spec: NormalizationSpec,
+    registry: Registry,
 ) -> tuple[str, NormalizationStatus, tuple[str, ...] | None]:
-    for step in spec.steps:
+    for step_name in spec.steps:
+        step = fetch_struct(
+            struct_type_name=NormStep.__name__,
+            field="name",
+            value=step_name,
+            registry=registry,
+        )
         text = apply_step(
             text=text,
             step=step,

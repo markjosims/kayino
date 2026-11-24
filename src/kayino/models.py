@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Literal
+from typing import Literal, TypeAliasType, get_args
 
-from attrs import Factory, frozen
+from attrs import Factory, fields, frozen
 from frozendict import frozendict
 
 """
@@ -48,13 +48,13 @@ class AnonToken:
 
 @frozen
 class TokenGroup:
-    string: str
+    name: str
     members: tuple[int, ...]
 
 
 @frozen
 class Pattern:
-    string: str
+    name: str
     value: str
 
 
@@ -132,8 +132,8 @@ class NormalizationSpec:
     """
 
     name: str
-    steps: tuple[NormStep, ...] = Factory(tuple)
-    licit_patterns: tuple[Pattern, ...] = Factory(tuple)
+    steps: tuple[str, ...] = Factory(tuple)
+    licit_patterns: tuple[str, ...] = Factory(tuple)
 
 
 # Status indicating whether a string conforms to the constraints
@@ -194,11 +194,30 @@ NAME_TO_STRUCT = {
 }
 
 
-TYPE_TO_UNION = {
-    PrebuiltNorm.__name__: NormStep.__name__,
-    MappingNorm.__name__: NormStep.__name__,
-    CdrewriteNorm.__name__: NormStep.__name__,
-}
+TYPE_TO_UNION = {}
+for union_type in (NormStep,):
+    for subtype in get_args(union_type.__value__):
+        TYPE_TO_UNION[subtype.__name__] = union_type.__name__
+
+
+def resolve_struct_type_name(struct_type_name: str) -> str:
+    macro_type = TYPE_TO_UNION.get(
+        struct_type_name,
+        struct_type_name,
+    )
+    return macro_type
+
+
+def resolve_struct_type_fields(struct_type_name: str) -> list[str]:
+    struct_type = NAME_TO_STRUCT[struct_type_name]
+    if isinstance(struct_type, TypeAliasType):
+        struct_type = struct_type.__value__
+        subtypes = get_args(struct_type)
+        type_fields = set(field.name for member in subtypes for field in fields(member))
+        type_fields = sorted(type_fields)
+        return type_fields
+    return sorted(field.name for field in fields(struct_type))
+
 
 """
 ## Regex symbols
@@ -257,4 +276,8 @@ class MalformedStructArrayError(KayinoError):
 
 
 class FsaCompilationError(KayinoError):
+    pass
+
+
+class StructDependencyError(KayinoError):
     pass

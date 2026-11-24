@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import enum
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from functools import lru_cache, wraps
 from typing import Literal
 
@@ -34,7 +34,7 @@ from kayino.models import (
 """
 
 
-def sequence_as_tuple(f: callable):
+def sequence_as_tuple(f: Callable):
     @wraps(f)
     def g(seq):
         t = tuple(seq)
@@ -43,7 +43,7 @@ def sequence_as_tuple(f: callable):
     return g
 
 
-def registry_as_frozendict(f: callable):
+def registry_as_frozendict(f: Callable):
     @wraps(f)
     def g(reg):
         frozen = frozendict({k: tuple(v) for k, v in reg.items()})

@@ -10,8 +10,6 @@ from rich.table import Table
 from kayino.acceptor import tokenize_str
 from kayino.core import normalize
 from kayino.models import (
-    NAME_TO_STRUCT,
-    TYPE_TO_UNION,
     KayinoError,
     NormalizationSpec,
     NormStep,
@@ -21,6 +19,7 @@ from kayino.models import (
     Text,
     Token,
     TokenGroup,
+    resolve_struct_type_fields,
 )
 from kayino.repl.grammar import parse_command
 from kayino.repl.models import NoActiveSpecError, ReplState, get_active_spec
@@ -28,6 +27,7 @@ from kayino.repl.styles import TOKEN_STYLES
 from kayino.structs import (
     build_struct,
     fetch_struct,
+    get_structs,
     mutate_struct,
     register_struct,
     remove_struct,
@@ -41,14 +41,10 @@ def handle_add(
 ) -> tuple[str, ReplState]:
     struct_type_name = kwargs.pop("struct")
 
-    struct = build_struct(
+    _, registry = build_struct(
         struct_type_name=struct_type_name,
         registry=state.registry,
         **kwargs,
-    )
-    registry = register_struct(
-        registry=state.registry,
-        struct=struct,
     )
     new_state = evolve(
         state,
@@ -65,6 +61,7 @@ def handle_remove(
     assert len(kwargs) == 1
     field, value = kwargs.popitem()
     struct = fetch_struct(
+        struct_type_name=struct_type_name,
         field=field,
         value=value,
         registry=state.registry,
@@ -82,27 +79,15 @@ def handle_list(
     state: ReplState,
 ) -> tuple[str, ReplState]:
     struct_type_name = kwargs.pop("struct")
-    if union_type := TYPE_TO_UNION.get(struct_type_name, None):
-        union_structs = state.registry[union_type]
-        struct_array = tuple(
-            filter(
-                (lambda s: type(s).__name__ == struct_type_name),
-                union_structs,
-            )
-        )
-
-    struct_array = state.registry[struct_type_name]
-
-    struct_type = NAME_TO_STRUCT[struct_type_name]
-    struct_attrs = struct_type.__attrs_attrs__
-    attr_cols = [struct_attr.name for struct_attr in struct_attrs]
+    struct_array = get_structs(struct_type_name, state.registry)
+    struct_fields = resolve_struct_type_fields(struct_type_name)
     console = Console()
     with console.capture() as capture:
         table = Table(title=struct_type_name)
-        for col in attr_cols:
+        for col in struct_fields:
             table.add_column(col)
         for struct in struct_array:
-            table.add_row(*(str(getattr(struct, col)) for col in attr_cols))
+            table.add_row(*(str(getattr(struct, col, "")) for col in struct_fields))
         console.print(table)
 
     formatted = to_formatted_text(ANSI(capture.get()))
@@ -112,11 +97,28 @@ def handle_list(
 _token_separator = (TOKEN_STYLES["separator"], ":")
 
 
+def _retrieve_text(
+    kwargs: dict,
+    registry: Registry,
+) -> str:
+    input_str = kwargs.get("text", None)
+    if input_str is None:
+        text_id = kwargs["index"]
+        text = fetch_struct(
+            struct_type_name=Text.__name__,
+            field="id",
+            value=text_id,
+            registry=registry,
+        )
+        input_str = text.string
+    return input_str
+
+
 def handle_tokenize(
     kwargs: dict[str, str],
     state: ReplState,
 ) -> tuple[FormattedText | str, ReplState]:
-    input_str = kwargs["text"]
+    input_str = _retrieve_text(kwargs, state.registry)
     formatted_tokens = _tokenize_inner(
         input_str,
         state.registry,
@@ -128,11 +130,14 @@ def handle_process(
     kwargs: dict[str, str],
     state: ReplState,
 ) -> tuple[FormattedText | str, ReplState]:
-    input_str = kwargs["text"]
+    input_str = _retrieve_text(kwargs, state.registry)
     spec = get_active_spec(state)
+    if spec is None:
+        raise NoActiveSpecError
     normalized, status, message = normalize(
         text=input_str,
         spec=spec,
+        registry=state.registry,
     )
     formatted_tokens = _tokenize_inner(
         normalized,
@@ -147,7 +152,9 @@ def _tokenize_inner(input_str: str, registry: Registry) -> FormattedText:
     for word in token_list:
         if not word.string:
             continue
-        if isinstance(word, Token):
+        if not word.strip():
+            format_string_tuples.append((" ", None))
+        elif isinstance(word, Token):
             if (
                 format_string_tuples
                 and format_string_tuples[-1][-1] not in RegexSymbols
@@ -160,7 +167,7 @@ def _tokenize_inner(input_str: str, registry: Registry) -> FormattedText:
                 and format_string_tuples[-1][-1] not in RegexSymbols
             ):
                 format_string_tuples.append(_token_separator)
-            format_string_tuples.append((TOKEN_STYLES["group"], word.string))
+            format_string_tuples.append((TOKEN_STYLES["group"], word.name))
 
         else:
             if (
@@ -179,22 +186,19 @@ def handle_read(
 ) -> tuple[FormattedText | str, ReplState]:
     filepath = kwargs["text"]
     lines = Path(filepath).read_text().splitlines()
-    structs = [
-        build_struct(
-            Text.__name__,
-            state.registry,
+    registry = state.registry
+    for line in lines:
+        _, registry = build_struct(
+            struct_type_name=Text.__name__,
+            registry=registry,
             source_type="file",
             source_value=filepath,
             string=line,
         )
-        for line in lines
-    ]
-    for struct in structs:
-        new_registry = register_struct(
-            registry=state.registry,
-            struct=struct,
-        )
-        state = evolve(state, registry=new_registry)
+    state = evolve(
+        state,
+        registry=registry,
+    )
 
     return f"Read {len(lines)} texts...", state
 
@@ -235,15 +239,21 @@ def handle_spec_add(
 ) -> tuple[FormattedText | str, ReplState]:
     field: Literal["steps", "licit_patterns"] = kwargs["field"]
     if field == "licit_patterns":
+        fetch_struct(
+            struct_type_name=Pattern.__name__,
+            field="name",
+            value=kwargs["name"],
+            registry=state.registry,
+        )
         new_spec = mutate_struct(
             struct=active_spec,
             field=field,
             data=kwargs["name"],
             mutation_type="append",
         )
-        status_message = "Appended step to spec!"
+        status_message = "Appended pattern to spec!"
     elif field == "steps":
-        step = fetch_struct(
+        fetch_struct(
             struct_type_name=NormStep.__name__,
             field="name",
             value=kwargs["name"],
@@ -252,7 +262,7 @@ def handle_spec_add(
         new_spec = mutate_struct(
             struct=active_spec,
             field=field,
-            data=step,
+            data=kwargs["name"],
             mutation_type="append",
         )
         status_message = "Appended step to spec!"
@@ -277,29 +287,24 @@ def handle_spec_remove(
 ) -> tuple[FormattedText | str, ReplState]:
     if not len(kwargs) == 1:
         raise ValueError
-    if pattern_text := kwargs.get("text", None):
+    if kwargs["field"] == "licit_patterns":
         new_spec = mutate_struct(
             struct=active_spec,
             field="licit_patterns",
-            data=pattern_text,
-            mutation_type="remove",
-            registry=state.registry,
+            data=kwargs["name"],
+            mutation_type="pop",
         )
         status_message = "Removed pattern from spec!"
-    elif step_name := kwargs.get("name", None):
-        step = fetch_struct(
-            struct_type_name=NormStep.__name__,
-            field="name",
-            value=step_name,
-            registry=state.registry,
-        )
+    if kwargs["field"] == "steps":
         new_spec = mutate_struct(
             struct=active_spec,
             field="steps",
-            data=step,
-            mutation_type="remove",
+            data=kwargs["name"],
+            mutation_type="pop",
         )
         status_message = "Removed normalization step from spec!"
+    else:
+        raise ValueError("Uknown field")
     new_registry = update_struct(
         old_struct=active_spec,
         new_struct=new_spec,
