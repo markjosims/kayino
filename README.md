@@ -145,9 +145,10 @@ just `load`, which refuses an invalid folder and lists every problem).
 - Status checking after normalization (tokens and licit patterns) is not
   implemented yet: `process` and `export` always report `licit`.
 - cdrewrite rules can't be added from the REPL (`add rwr ...` crashes the
-  REPL: the grammar has no slot for the rule's name), and every cdrewrite step
-  currently outputs an empty string (see the `BUG` note on `byte_star` in
-  `core.py`).
+  REPL: the grammar has no slot for the rule's name).
+- Texts or rewrite rules containing `[` or `]` crash `process` and `export`
+  when a cdrewrite step runs (pynini reads brackets as symbol syntax; the
+  strings need `pynini.escape`).
 - `spec add pat` / `spec rm pat` crash the REPL (the grammar and handler
   disagree on the argument name).
 - Pattern values given in quotes keep the quote characters, so they don't

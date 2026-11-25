@@ -286,8 +286,10 @@ Phase 3's `check()`, which also replaces this interim code.
       tokenization shifts, unsupported tables). Grammar fixtures cover
       `rename`/`mv`.
 
-Not in scope, flagged with `# BUG:`: `core.byte_star` only accepts `""`, so
-every cdrewrite step currently returns `""`.
+Found during this phase: `core.byte_star` only accepted `""`, so every
+cdrewrite step returned `""`. Fixed after Phase 5 (`closure(BYTE)`); checked
+with plain, insertion, contextual and multi-byte rules. Still open: `[`/`]`
+in texts or rule strings raise `FstStringCompilationError`.
 
 ### Phase 4: Persistence (done)
 
