@@ -6,7 +6,7 @@ import pytest
 from kayino.core import apply_mappings, apply_prebuilt, apply_step
 from kayino.models import MappingNorm, MappingRow, PrebuiltNorm
 from kayino.prebuilt import PREBUILT_NORMS
-from kayino.structs import build_struct, init_registry
+from kayino.structs import change, connect, insert
 
 MAPPING_FILE = Path(__file__).parent / "test_cases" / "mapping_tests.jsonl"
 MAPPINGS = [json.loads(line) for line in MAPPING_FILE.read_bytes().splitlines()]
@@ -24,12 +24,12 @@ def test_no_transitivity(mapping_test):
     result = apply_mappings(text, mappings)
     assert result == expected
 
-    map_step, registry = build_struct(MappingNorm.__name__, init_registry(), name="test")
-    for intab, outtab in mappings.items():
-        _, registry = build_struct(
-            MappingRow.__name__, registry, norm="test", intab=intab, outtab=outtab
-        )
-    result = apply_step(text, map_step, registry)
+    db = connect()
+    with change(db):
+        insert(db, MappingNorm.__name__, name="test")
+        for intab, outtab in mappings.items():
+            insert(db, MappingRow.__name__, norm="test", intab=intab, outtab=outtab)
+    result = apply_step(text, MappingNorm(name="test"), db)
     assert result == expected
 
 
@@ -42,7 +42,7 @@ def test_prebuilt(prebuilt_test):
     result = apply_prebuilt(text, prebuilt_name)
     assert result == expected
 
-    registry = init_registry()
+    registry = connect()
     prebuilt_step = PrebuiltNorm(name=prebuilt_name)
     result = apply_step(text, prebuilt_step, registry)
     assert result == expected

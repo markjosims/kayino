@@ -282,15 +282,6 @@ wheels = [
 ]
 
 [[package]]
-name = "frozendict"
-version = "2.5.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/ed/45/7335e29396dde7c9ec00c4758c46bb7d4a9f07ca0a351ae58b814ca6b6a4/frozendict-2.5.1.tar.gz", hash = "sha256:b79b0c133220c5976ff05b8bfe3c1215119caa6255f477a309151fd5e2c2c0c3", size = 337443, upload-time = "2026-10-30T20:37:01.879Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/60/98/0902e074fb777b4064594a3a18773a50d661dbb8d73b7487fdf63ba088cc/frozendict-2.5.1-py3-none-any.whl", hash = "sha256:b6e602e286b912beca1e12615f50eda6c74646b440c8cfde34221adee6c98c5e", size = 18055, upload-time = "2026-10-30T20:37:00.614Z" },
-]
-
-[[package]]
 name = "humanize"
 version = "4.17.0"
 source = { registry = "https://pypi.org/simple" }
@@ -417,8 +408,6 @@ source = { editable = "." }
 dependencies = [
     { name = "attrs" },
     { name = "cattrs" },
-    { name = "frictionless" },
-    { name = "frozendict" },
     { name = "prompt-toolkit" },
     { name = "pygments" },
     { name = "pynini" },
@@ -429,6 +418,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "frictionless" },
     { name = "ipython" },
     { name = "pytest" },
 ]
@@ -437,8 +427,6 @@ dev = [
 requires-dist = [
     { name = "attrs", specifier = ">=26.1.0" },
     { name = "cattrs", specifier = ">=26.2.1" },
-    { name = "frictionless", specifier = ">=5.21.0" },
-    { name = "frozendict", specifier = ">=2.5.1" },
     { name = "prompt-toolkit", specifier = ">=3.0.53" },
     { name = "pygments", specifier = ">=2.21.0" },
     { name = "pynini", specifier = ">=2.1.7" },
@@ -449,6 +437,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "frictionless", specifier = ">=5.21.0" },
     { name = "ipython", specifier = ">=9.18.1" },
     { name = "pytest", specifier = ">=9.2.0" },
 ]

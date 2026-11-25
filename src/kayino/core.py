@@ -14,7 +14,7 @@ from kayino.models import (
     Registry,
 )
 from kayino.prebuilt import PREBUILT_NORM_FUNCS
-from kayino.structs import fetch_struct, mapping, spec_steps
+from kayino.structs import fetch, select
 
 byte_star = pynini.closure(BYTE)
 
@@ -97,7 +97,9 @@ def apply_step(
     elif step.kind == "mapping":
         return apply_mappings(
             text=text,
-            mappings=mapping(registry, step.name),
+            mappings={
+                row.intab: row.outtab for row in select(registry, "MappingRow", norm=step.name)
+            },
         )
     raise ValueError("Unknown normstep type", step.kind)
 
@@ -107,13 +109,8 @@ def normalize(
     spec: NormalizationSpec,
     registry: Registry,
 ) -> tuple[str, NormalizationStatus, tuple[str, ...] | None]:
-    for step_name in spec_steps(registry, spec.name):
-        step = fetch_struct(
-            struct_type_name=NormStep.__name__,
-            field="name",
-            value=step_name,
-            registry=registry,
-        )
+    for spec_step in select(registry, "SpecStep", spec=spec.name):
+        step = fetch(registry, NormStep.__name__, name=spec_step.step)
         text = apply_step(
             text=text,
             step=step,

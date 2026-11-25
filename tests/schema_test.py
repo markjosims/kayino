@@ -1,6 +1,6 @@
 """
-Tests for table declarations, the tagged-union converter and the
-nested-view query helpers.
+Tests for table declarations, the tagged-union converter, the generated
+SQLite schema, and reading rows back (select).
 """
 
 import pytest
@@ -10,28 +10,17 @@ from kayino.models import (
     CONVERTER,
     TABLES,
     CdrewriteNorm,
-    GroupMember,
     MappingNorm,
-    MappingRow,
     NormStep,
     Pattern,
     PrebuiltNorm,
-    SpecStep,
     Symbol,
     Token,
     TokenGroup,
     table_for,
 )
 from kayino.schema import Table, check_tables, ref
-from kayino.structs import (
-    build_struct,
-    get_structs,
-    group_members,
-    init_registry,
-    mapping,
-    next_position,
-    spec_steps,
-)
+from kayino.structs import change, connect, insert, select
 
 
 def test_declared_tables_are_consistent():
@@ -105,52 +94,44 @@ def test_table_for(name, table_name):
     assert table_for(name).name == table_name
 
 
-def test_get_structs_filters_union_members():
-    registry = init_registry()
-    _, registry = build_struct("Token", registry, name="a")
-    _, registry = build_struct("TokenGroup", registry, name="V")
-    assert get_structs("Token", registry) == (Token(name="a"),)
-    assert get_structs("TokenGroup", registry) == (TokenGroup(name="V"),)
-    assert len(get_structs("symbols", registry)) == 2
-    assert len(get_structs("Symbol", registry)) == 2
+def test_select_filters_union_members():
+    db = connect()
+    with change(db):
+        insert(db, "Token", name="a")
+        insert(db, "TokenGroup", name="V")
+    assert select(db, "Token") == (Token(name="a"),)
+    assert select(db, "TokenGroup") == (TokenGroup(name="V"),)
+    assert len(select(db, "symbols")) == 2
+    assert len(select(db, "Symbol")) == 2
+    assert select(db, "Token", name="V") == ()
 
 
-def _with_rows(table_name: str, rows: list) -> dict:
-    """An unchecked registry: the view helpers don't need valid references."""
-    registry = init_registry()
-    return registry | {table_name: registry[table_name] + tuple(rows)}
+def test_select_orders_children_by_position_not_insertion():
+    db = connect()
+    with change(db):
+        for name in ["a", "b", "c", "z"]:
+            insert(db, "Token", name=name)
+        insert(db, "TokenGroup", name="V")
+        insert(db, "TokenGroup", name="W")
+        for position, token in [(2, "c"), (0, "a"), (1, "b")]:
+            insert(db, "GroupMember", group="V", position=position, token=token)
+        insert(db, "GroupMember", group="W", position=0, token="z")
+        insert(db, "NormalizationSpec", name="s")
+        insert(db, "SpecStep", spec="s", position=5, step="lowercase")
+        insert(db, "SpecStep", spec="s", position=1, step="NFC_normalization")
+    assert [m.token for m in select(db, "GroupMember", group="V")] == ["a", "b", "c"]
+    assert [m.token for m in select(db, "GroupMember", group="W")] == ["z"]
+    assert select(db, "GroupMember", group="missing") == ()
+    assert [s.step for s in select(db, "SpecStep", spec="s")] == ["NFC_normalization", "lowercase"]
 
 
-def test_nested_views_follow_position_not_insertion_order():
-    group_rows = [
-        GroupMember(group="V", position=2, token="c"),
-        GroupMember(group="V", position=0, token="a"),
-        GroupMember(group="W", position=0, token="z"),
-        GroupMember(group="V", position=1, token="b"),
-    ]
-    step_rows = [
-        SpecStep(spec="s", position=5, step="lowercase"),
-        SpecStep(spec="s", position=1, step="NFC_normalization"),
-    ]
-    registry = _with_rows("group_members", group_rows)
-    registry = registry | {"spec_steps": tuple(step_rows)}
-    assert group_members(registry, "V") == ("a", "b", "c")
-    assert group_members(registry, "W") == ("z",)
-    assert group_members(registry, "missing") == ()
-    assert spec_steps(registry, "s") == ("NFC_normalization", "lowercase")
-    assert next_position(registry, "group_members", "group", "V") == 3
-    assert next_position(registry, "spec_steps", "spec", "s") == 6
-    assert next_position(registry, "spec_steps", "spec", "new") == 0
-
-
-def test_mapping_view():
-    registry = _with_rows(
-        "mapping_rows",
-        [
-            MappingRow(norm="m", intab="a", outtab="b"),
-            MappingRow(norm="m", intab="ch", outtab="c"),
-            MappingRow(norm="other", intab="x", outtab=""),
-        ],
-    )
-    assert mapping(registry, "m") == {"a": "b", "ch": "c"}
-    assert mapping(registry, "other") == {"x": ""}
+def test_select_mapping_rows():
+    db = connect()
+    with change(db):
+        insert(db, "MappingNorm", name="m")
+        insert(db, "MappingNorm", name="other")
+        insert(db, "MappingRow", norm="m", intab="a", outtab="b")
+        insert(db, "MappingRow", norm="m", intab="ch", outtab="c")
+        insert(db, "MappingRow", norm="other", intab="x", outtab="")
+    assert {r.intab: r.outtab for r in select(db, "MappingRow", norm="m")} == {"a": "b", "ch": "c"}
+    assert {r.intab: r.outtab for r in select(db, "MappingRow", norm="other")} == {"x": ""}

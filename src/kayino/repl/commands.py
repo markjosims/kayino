@@ -15,7 +15,6 @@ from kayino.models import (
     MappingNorm,
     MappingRow,
     NormalizationSpec,
-    NormStep,
     Pattern,
     RegexSymbols,
     Registry,
@@ -38,18 +37,7 @@ from kayino.store import (
     load,
     validate_project,
 )
-from kayino.structs import (
-    build_struct,
-    fetch_struct,
-    get_structs,
-    group_members,
-    mapping,
-    next_position,
-    remove_struct,
-    rename_struct,
-    spec_patterns,
-    spec_steps,
-)
+from kayino.structs import change, delete, fetch, insert, rename, select
 
 
 def handle_add(
@@ -57,41 +45,16 @@ def handle_add(
     state: ReplState,
 ) -> tuple[str, ReplState]:
     struct_type_name = kwargs.pop("struct")
-
-    # Nested args become child rows, inserted after the parent.
-    members = ()
-    if struct_type_name == TokenGroup.__name__:
-        members = kwargs.pop("string_list", None) or ()
-    pairs = ()
-    if struct_type_name == MappingNorm.__name__:
-        pairs = kwargs.pop("mapping", None) or ()
-
-    struct, registry = build_struct(
-        struct_type_name=struct_type_name,
-        registry=state.registry,
-        **kwargs,
-    )
-    for position, token in enumerate(members):
-        _, registry = build_struct(
-            struct_type_name=GroupMember.__name__,
-            registry=registry,
-            group=struct.name,
-            position=position,
-            token=token,
-        )
-    for intab, outtab in pairs:
-        _, registry = build_struct(
-            struct_type_name=MappingRow.__name__,
-            registry=registry,
-            norm=struct.name,
-            intab=intab,
-            outtab=outtab,
-        )
-    new_state = evolve(
-        state,
-        registry=registry,
-    )
-    return f"Added {struct_type_name} to registry...", new_state
+    # Nested args become child rows, inserted with the parent in one change.
+    members = kwargs.pop("string_list", None) or () if struct_type_name == TokenGroup.__name__ else ()
+    pairs = kwargs.pop("mapping", None) or () if struct_type_name == MappingNorm.__name__ else ()
+    with change(state.db) as db:
+        insert(db, struct_type_name, **kwargs)
+        for position, token in enumerate(members):
+            insert(db, GroupMember.__name__, group=kwargs["name"], position=position, token=token)
+        for intab, outtab in pairs:
+            insert(db, MappingRow.__name__, norm=kwargs["name"], intab=intab, outtab=outtab)
+    return f"Added {struct_type_name} to registry...", state
 
 
 def handle_remove(
@@ -99,20 +62,9 @@ def handle_remove(
     state: ReplState,
 ) -> tuple[str, ReplState]:
     struct_type_name = kwargs.pop("struct")
-    assert len(kwargs) == 1
-    field, value = kwargs.popitem()
-    struct = fetch_struct(
-        struct_type_name=struct_type_name,
-        field=field,
-        value=value,
-        registry=state.registry,
-    )
-    registry = remove_struct(struct, state.registry)
-    new_state = evolve(
-        state,
-        registry=registry,
-    )
-    return f"Removed {struct_type_name} from registry...", new_state
+    with change(state.db) as db:
+        delete(db, struct_type_name, **kwargs)
+    return f"Removed {struct_type_name} from registry...", state
 
 
 def handle_rename(
@@ -121,40 +73,30 @@ def handle_rename(
 ) -> tuple[str, ReplState]:
     struct_type_name = kwargs.pop("struct")
     old, new = kwargs["old"], kwargs["new"]
-    registry = rename_struct(
-        struct_type_name=struct_type_name,
-        old_name=old,
-        new_name=new,
-        registry=state.registry,
-    )
-    active_spec = state.active_spec
-    if table_for(struct_type_name).name == "specs" and active_spec == old:
-        active_spec = new
-    new_state = evolve(
-        state,
-        registry=registry,
-        active_spec=active_spec,
-    )
-    return f"Renamed {struct_type_name} {old} to {new}...", new_state
+    rename(state.db, struct_type_name, old, new)
+    if table_for(struct_type_name).name == "specs" and state.active_spec == old:
+        state = evolve(state, active_spec=new)
+    return f"Renamed {struct_type_name} {old} to {new}...", state
 
 
-# struct type name -> extra column -> render(registry, struct) -> str
+# struct type name -> extra column -> render(db, struct) -> str
 _list_extras = {
     TokenGroup.__name__: {
-        "members": lambda registry, group: " ".join(
-            group_members(registry, group.name)
+        "members": lambda db, group: " ".join(
+            m.token for m in select(db, GroupMember.__name__, group=group.name)
         ),
     },
     MappingNorm.__name__: {
-        "mapping": lambda registry, norm: "; ".join(
-            f"{intab} > {outtab}"
-            for intab, outtab in mapping(registry, norm.name).items()
+        "mapping": lambda db, norm: "; ".join(
+            f"{r.intab} > {r.outtab}" for r in select(db, MappingRow.__name__, norm=norm.name)
         ),
     },
     NormalizationSpec.__name__: {
-        "steps": lambda registry, spec: " ".join(spec_steps(registry, spec.name)),
-        "licit_patterns": lambda registry, spec: " ".join(
-            spec_patterns(registry, spec.name)
+        "steps": lambda db, spec: " ".join(
+            s.step for s in select(db, SpecStep.__name__, spec=spec.name)
+        ),
+        "licit_patterns": lambda db, spec: " ".join(
+            p.pattern for p in select(db, SpecPattern.__name__, spec=spec.name)
         ),
     },
 }
@@ -165,7 +107,7 @@ def handle_list(
     state: ReplState,
 ) -> tuple[str, ReplState]:
     struct_type_name = kwargs.pop("struct")
-    struct_array = get_structs(struct_type_name, state.registry)
+    struct_array = select(state.db, struct_type_name)
     struct_fields = resolve_struct_type_fields(struct_type_name)
     # Nested views shown as extra columns, for the row types that have them
     extra_columns = {
@@ -180,7 +122,7 @@ def handle_list(
     def cell(struct: object, col: str) -> str:
         render = _list_extras.get(type(struct).__name__, {}).get(col)
         if render is not None:
-            return render(state.registry, struct)
+            return render(state.db, struct)
         return str(getattr(struct, col, ""))
 
     console = Console()
@@ -201,18 +143,12 @@ _token_separator = (TOKEN_STYLES["separator"], ":")
 
 def _retrieve_text(
     kwargs: dict,
-    registry: Registry,
+    db: Registry,
 ) -> str:
     input_str = kwargs.get("text", None)
     if input_str is None:
         text_id = kwargs["index"]
-        text = fetch_struct(
-            struct_type_name=Text.__name__,
-            field="id",
-            value=text_id,
-            registry=registry,
-        )
-        input_str = text.string
+        input_str = fetch(db, Text.__name__, id=text_id).string
     return input_str
 
 
@@ -220,36 +156,24 @@ def handle_tokenize(
     kwargs: dict[str, str],
     state: ReplState,
 ) -> tuple[FormattedText | str, ReplState]:
-    input_str = _retrieve_text(kwargs, state.registry)
-    formatted_tokens = _tokenize_inner(
-        input_str,
-        state.registry,
-    )
-    return formatted_tokens, state
+    input_str = _retrieve_text(kwargs, state.db)
+    return _tokenize_inner(input_str, state.db), state
 
 
 def handle_process(
     kwargs: dict[str, str],
     state: ReplState,
 ) -> tuple[FormattedText | str, ReplState]:
-    input_str = _retrieve_text(kwargs, state.registry)
+    input_str = _retrieve_text(kwargs, state.db)
     spec = get_active_spec(state)
     if spec is None:
         raise NoActiveSpecError
-    normalized, status, message = normalize(
-        text=input_str,
-        spec=spec,
-        registry=state.registry,
-    )
-    formatted_tokens = _tokenize_inner(
-        normalized,
-        state.registry,
-    )
-    return formatted_tokens, state
+    normalized, status, message = normalize(input_str, spec, state.db)
+    return _tokenize_inner(normalized, state.db), state
 
 
-def _tokenize_inner(input_str: str, registry: Registry) -> FormattedText:
-    token_list = tokenize_str(input_str, registry)
+def _tokenize_inner(input_str: str, db: Registry) -> FormattedText:
+    token_list = tokenize_str(input_str, select(db, "symbols"))
     format_string_tuples = []
     for word in token_list:
         if not surface(word):
@@ -288,20 +212,9 @@ def handle_read(
 ) -> tuple[FormattedText | str, ReplState]:
     filepath = kwargs["text"]
     lines = Path(filepath).read_text().splitlines()
-    registry = state.registry
-    for line in lines:
-        _, registry = build_struct(
-            struct_type_name=Text.__name__,
-            registry=registry,
-            source_type="file",
-            source_value=filepath,
-            string=line,
-        )
-    state = evolve(
-        state,
-        registry=registry,
-    )
-
+    with change(state.db) as db:
+        for line in lines:
+            insert(db, Text.__name__, string=line, source_type="file", source_value=filepath)
     return f"Read {len(lines)} texts...", state
 
 
@@ -340,44 +253,21 @@ def handle_spec_add(
     active_spec: NormalizationSpec,
 ) -> tuple[FormattedText | str, ReplState]:
     field: Literal["steps", "licit_patterns"] = kwargs["field"]
-    if field == "licit_patterns":
-        fetch_struct(
-            struct_type_name=Pattern.__name__,
-            field="text",
-            value=kwargs["name"],
-            registry=state.registry,
-        )
-        _, new_registry = build_struct(
-            struct_type_name=SpecPattern.__name__,
-            registry=state.registry,
-            spec=active_spec.name,
-            pattern=kwargs["name"],
-        )
-        status_message = "Appended pattern to spec!"
-    elif field == "steps":
-        fetch_struct(
-            struct_type_name=NormStep.__name__,
-            field="name",
-            value=kwargs["name"],
-            registry=state.registry,
-        )
-        _, new_registry = build_struct(
-            struct_type_name=SpecStep.__name__,
-            registry=state.registry,
-            spec=active_spec.name,
-            position=next_position(
-                state.registry, "spec_steps", "spec", active_spec.name
-            ),
-            step=kwargs["name"],
-        )
-        status_message = "Appended step to spec!"
-    else:
-        raise ValueError("Invalid field")
-    new_state = evolve(
-        state,
-        registry=new_registry,
-    )
-    return status_message, new_state
+    with change(state.db) as db:
+        if field == "licit_patterns":
+            fetch(db, Pattern.__name__, text=kwargs["name"])
+            insert(db, SpecPattern.__name__, spec=active_spec.name, pattern=kwargs["name"])
+            status_message = "Appended pattern to spec!"
+        elif field == "steps":
+            (position,) = db.execute(
+                'SELECT COALESCE(MAX("position") + 1, 0) FROM "spec_steps" WHERE "spec" = ?',
+                (active_spec.name,),
+            ).fetchone()
+            insert(db, SpecStep.__name__, spec=active_spec.name, position=position, step=kwargs["name"])
+            status_message = "Appended step to spec!"
+        else:
+            raise ValueError("Invalid field")
+    return status_message, state
 
 
 def handle_spec_remove(
@@ -388,22 +278,16 @@ def handle_spec_remove(
     # Removes every occurrence of the step/pattern from the spec.
     if kwargs["field"] == "licit_patterns":
         # BUG: same "text" vs "name" grammar mismatch as in handle_spec_add.
-        table_name, column = "spec_patterns", "pattern"
+        type_name, column = SpecPattern.__name__, "pattern"
         status_message = "Removed pattern from spec!"
     elif kwargs["field"] == "steps":
-        table_name, column = "spec_steps", "step"
+        type_name, column = SpecStep.__name__, "step"
         status_message = "Removed normalization step from spec!"
     else:
         raise ValueError("Unknown field")
-    new_registry = state.registry
-    for row in get_structs(table_name, state.registry):
-        if row.spec == active_spec.name and getattr(row, column) == kwargs["name"]:
-            new_registry = remove_struct(row, new_registry)
-    new_state = evolve(
-        state,
-        registry=new_registry,
-    )
-    return status_message, new_state
+    with change(state.db) as db:
+        delete(db, type_name, spec=active_spec.name, **{column: kwargs["name"]})
+    return status_message, state
 
 
 def handle_spec_activate(
@@ -412,12 +296,7 @@ def handle_spec_activate(
     active_spec: NormalizationSpec | None,
 ) -> tuple[FormattedText | str, ReplState]:
     if spec_name := kwargs.get("name", None):
-        spec = fetch_struct(
-            struct_type_name=NormalizationSpec.__name__,
-            field="name",
-            value=spec_name,
-            registry=state.registry,
-        )
+        spec = fetch(state.db, NormalizationSpec.__name__, name=spec_name)
         new_state = evolve(
             state,
             active_spec=spec.name,
@@ -448,8 +327,8 @@ def _check_writable_project_dir(path: Path) -> None:
         raise ProjectError(f"{path} is not empty and is not a kayino project")
 
 
-def _save(registry, path: Path) -> str:
-    dump(registry, path)
+def _save(db: Registry, path: Path) -> str:
+    dump(db, path)
     if violations := validate_project(path):
         return _format_violations(
             f"Saved to {path}, but the saved files have problems:", violations
@@ -468,7 +347,7 @@ def handle_init(
     path = _path_arg(kwargs)
     if path.exists() and any(path.iterdir()):
         raise ProjectError(f"{path} is not empty")
-    message = _save(state.registry, path)
+    message = _save(state.db, path)
     return message, evolve(state, project_dir=path)
 
 
@@ -480,7 +359,7 @@ def handle_save(
     if path is None:
         raise ProjectError("No project folder yet: use `save DIR` or `init DIR`")
     _check_writable_project_dir(path)
-    message = _save(state.registry, path)
+    message = _save(state.db, path)
     return message, evolve(state, project_dir=path)
 
 
@@ -490,8 +369,7 @@ def handle_load(
 ) -> tuple[str, ReplState]:
     """Replace the session with a project folder's contents."""
     path = _path_arg(kwargs)
-    registry = load(path)
-    return f"Loaded {path}", ReplState(registry=registry, project_dir=path)
+    return f"Loaded {path}", ReplState(db=load(path), project_dir=path)
 
 
 def handle_validate(
@@ -514,7 +392,7 @@ def handle_export(
 ) -> tuple[str, ReplState]:
     path = _path_arg(kwargs)
     count = export(
-        registry=state.registry,
+        db=state.db,
         spec_name=kwargs["spec"],
         out_path=path,
         project_dir=state.project_dir,

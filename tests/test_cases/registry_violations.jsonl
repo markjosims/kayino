@@ -11,7 +11,6 @@
 {"id": "spec step for a missing spec", "rows": {"spec_steps": [{"spec": "ghost", "position": 0, "step": "lowercase"}]}, "expected": [["spec_steps", "ref", "spec"]], "frictionless": [["spec_steps", "ref", "spec"]]}
 {"id": "spec pattern is a token", "rows": {"symbols": [{"kind": "token", "name": "a"}], "specs": [{"name": "s"}], "spec_patterns": [{"spec": "s", "pattern": "a"}]}, "expected": [["spec_patterns", "ref", "pattern"]], "frictionless": []}
 {"id": "text with unknown source type", "rows": {"texts": [{"string": "hi", "id": 0, "source_type": "bogus", "source_value": "x"}]}, "expected": [["texts", "enum", "source_type"]], "frictionless": [["texts", "enum", "source_type"]]}
-{"id": "row whose kind disagrees with its class", "rows": {"symbols": [{"class": "Token", "kind": "group", "name": "a"}]}, "expected": [["symbols", "enum", "kind"]], "frictionless": []}
 {"id": "duplicate text id", "rows": {"texts": [{"string": "a", "id": 0, "source_type": "user", "source_value": "x"}, {"string": "b", "id": 0, "source_type": "user", "source_value": "x"}]}, "expected": [["texts", "key", null]], "frictionless": [["texts", "key", null]]}
 {"id": "pattern that does not compile", "rows": {"symbols": [{"kind": "token", "name": "a"}, {"kind": "pattern", "name": "P", "value": "zz"}]}, "expected": [["symbols", "custom", "value"]], "frictionless": []}
 {"id": "prebuilt norm with no function", "rows": {"norm_steps": [{"kind": "prebuilt", "name": "nope"}]}, "expected": [["norm_steps", "custom", "name"]], "frictionless": []}

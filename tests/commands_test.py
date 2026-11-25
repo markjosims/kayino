@@ -8,7 +8,19 @@ from kayino.core import normalize
 from kayino.repl.commands import repl_turn
 from kayino.repl.grammar import create_grammar
 from kayino.repl.models import ReplState, get_active_spec
-from kayino.structs import group_members, mapping, spec_steps
+from kayino.structs import select
+
+
+def group_members(db, group):
+    return tuple(m.token for m in select(db, "GroupMember", group=group))
+
+
+def mapping(db, norm):
+    return {r.intab: r.outtab for r in select(db, "MappingRow", norm=norm)}
+
+
+def spec_steps(db, spec):
+    return tuple(s.step for s in select(db, "SpecStep", spec=spec))
 
 
 @pytest.fixture(scope="module")
@@ -27,12 +39,12 @@ def run(commands: list[str], grammar, state: ReplState | None = None):
 
 def test_add_token_group_creates_member_rows(grammar):
     _, state = run(["add tok a", "add tok b", "add tkg <V> a b"], grammar)
-    assert group_members(state.registry, "<V>") == ("a", "b")
+    assert group_members(state.db, "<V>") == ("a", "b")
 
 
 def test_add_mapping_creates_mapping_rows(grammar):
     _, state = run(["add map m a > b; ch > c"], grammar)
-    assert mapping(state.registry, "m") == {"a": "b", "ch": "c"}
+    assert mapping(state.db, "m") == {"a": "b", "ch": "c"}
 
 
 def test_spec_add_and_remove_steps(grammar):
@@ -47,10 +59,10 @@ def test_spec_add_and_remove_steps(grammar):
         ],
         grammar,
     )
-    assert spec_steps(state.registry, "s") == ("lowercase", "m", "lowercase")
+    assert spec_steps(state.db, "s") == ("lowercase", "m", "lowercase")
 
     _, state = run(["spec rm step lowercase"], grammar, state)
-    assert spec_steps(state.registry, "s") == ("m",)
+    assert spec_steps(state.db, "s") == ("m",)
 
 
 def test_normalize_uses_spec_rows(grammar):
@@ -64,7 +76,7 @@ def test_normalize_uses_spec_rows(grammar):
         ],
         grammar,
     )
-    text, status, _ = normalize("AAx", get_active_spec(state), state.registry)
+    text, status, _ = normalize("AAx", get_active_spec(state), state.db)
     assert text == "bbx"
     assert status == "licit"
 
@@ -89,14 +101,14 @@ def test_remove_group_cascades_to_members(grammar):
         ],
         grammar,
     )
-    assert group_members(state.registry, "<V>") == ("b",)
-    assert len(state.registry["group_members"]) == 1
+    assert group_members(state.db, "<V>") == ("b",)
+    assert len(select(state.db, "group_members")) == 1
 
 
 def test_remove_mapping_cascades_to_rows(grammar):
     _, state = run(["add map m a > b; c > d", "add map n x > y", "remove map m"], grammar)
-    assert mapping(state.registry, "m") == {}
-    assert mapping(state.registry, "n") == {"x": "y"}
+    assert mapping(state.db, "m") == {}
+    assert mapping(state.db, "n") == {"x": "y"}
 
 
 def test_remove_spec_cascades_to_steps(grammar):
@@ -104,19 +116,5 @@ def test_remove_spec_cascades_to_steps(grammar):
         ["add spec s", "spec act s", "spec add step lowercase", "remove spec s"],
         grammar,
     )
-    assert spec_steps(state.registry, "s") == ()
-    assert state.registry["spec_steps"] == ()
-
-
-def test_update_keeps_children():
-    from attrs import evolve
-
-    from kayino.models import MappingNorm, MappingRow
-    from kayino.structs import build_struct, init_registry, replace_struct
-
-    norm, registry = build_struct(MappingNorm.__name__, init_registry(), name="m")
-    _, registry = build_struct(
-        MappingRow.__name__, registry, norm="m", intab="a", outtab="b"
-    )
-    registry = replace_struct(norm, evolve(norm, description="new"), registry)
-    assert mapping(registry, "m") == {"a": "b"}
+    assert spec_steps(state.db, "s") == ()
+    assert select(state.db, "spec_steps") == ()

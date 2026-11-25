@@ -3,31 +3,26 @@
 
 The on-disk format of a Kayino project: a folder with one CSV file per table
 (see `kayino.models.TABLES`) and a generated `datapackage.yaml` (a
-Frictionless Data Package descriptor) describing them.
+Frictionless Data Package descriptor) describing them, so other tools can
+validate the folder too.
 
 The CSV files are the data; edit them by hand if you like. The descriptor is
-derived from the table declarations and rewritten on every save. It is also
-never *read* back: validation always uses the descriptor generated from the
-current code, so a stale or edited `datapackage.yaml` cannot loosen the
-checks.
+derived from the table declarations and rewritten on every save. Kayino
+never reads it back.
 
-Validation at the file boundary runs in two layers:
-1. Frictionless on the raw files (types, keys, references, enums, missing
-   files), giving `Violation(kind="file" | "key" | "ref" | "enum")`.
-2. If that passes, the files are structured into a registry and
-   `kayino.structs.check()` runs (kind-restricted refs, custom checks).
+Loading inserts every CSV row into a fresh registry inside one transaction.
+SQLite rejects bad rows (duplicate keys, bad enums or integers, empty keys)
+one by one, with their CSV row numbers; then references and the custom
+checks run (`kayino.structs.check`). Any violation and nothing is loaded.
 """
 
 import csv
-from collections import defaultdict
 from collections.abc import Sequence
+from itertools import groupby
 from pathlib import Path
-from typing import Literal, get_args, get_origin
 
 import yaml
 from attrs import evolve
-from frictionless import Package
-from frozendict import frozendict
 
 from kayino.core import normalize
 from kayino.models import (
@@ -40,8 +35,8 @@ from kayino.models import (
     RegistryCheckError,
     Text,
 )
-from kayino.schema import Table, Violation, type_hints
-from kayino.structs import check, fetch_struct, get_structs
+from kayino.schema import Table, Violation, column_enum, is_integer_column
+from kayino.structs import check, connect, fetch, insert_record, select
 
 DATAPACKAGE_FILE = "datapackage.yaml"
 
@@ -63,32 +58,18 @@ class ProjectError(KayinoError):
 
 def _field_descriptor(table: Table, column: str) -> dict:
     """
-    Frictionless treats an empty cell as missing (null). Kayino itself reads
-    the CSVs with the `csv` module, so "" always comes back as "" (an empty
-    outtab still means "delete"). Here, empty is only forbidden where it can
-    never be meaningful: keys, references, enums and integers.
+    Frictionless treats an empty cell as missing (null). Kayino reads "" as
+    "" (an empty outtab still means "delete"). Here, empty is only forbidden
+    where it can never be meaningful: keys, references, enums and integers.
     """
-    field_type = "string"
-    enum: dict[str, None] = {}
-    for cls in table.row_classes:
-        hint = type_hints(cls).get(column)
-        if hint is None:
-            continue
-        if get_origin(hint) is Literal:
-            enum.update(dict.fromkeys(get_args(hint)))
-        elif hint is int:
-            field_type = "integer"
+    integer = is_integer_column(table, column)
+    enum = column_enum(table, column)
     constraints = {}
-    if (
-        column in table.key
-        or column in table.refs()
-        or enum
-        or field_type == "integer"
-    ):
+    if column in table.key or column in table.refs() or enum or integer:
         constraints["required"] = True
     if enum:
         constraints["enum"] = list(enum)
-    descriptor = {"name": column, "type": field_type}
+    descriptor = {"name": column, "type": "integer" if integer else "string"}
     if constraints:
         descriptor["constraints"] = constraints
     return descriptor
@@ -148,54 +129,29 @@ def is_project(path: Path) -> bool:
 """
 
 
-def _rows_for_dump(table: Table, rows: Sequence[object], renumber: bool) -> list[object]:
-    """
-    Rows in file order. For tables with a position column, children are
-    grouped by parent and sorted by position, and (if `renumber`) positions
-    are rewritten as 0..n so that gaps left by removals disappear.
-    """
+def _renumbered(table: Table, rows: Sequence[object]) -> list[object]:
+    """Positions rewritten as 0..n per parent, closing gaps left by removals."""
     if not table.position:
         return list(rows)
-    parent_columns = [column for column in table.key if column != table.position]
-    by_parent: dict[tuple, list[object]] = defaultdict(list)
-    for row in rows:
-        by_parent[tuple(getattr(row, column) for column in parent_columns)].append(row)
-    ordered = []
-    for children in by_parent.values():
-        children.sort(key=lambda row: getattr(row, table.position))
-        if renumber:
-            children = [
-                evolve(child, **{table.position: position})
-                for position, child in enumerate(children)
-            ]
-        ordered.extend(children)
-    return ordered
+    parent = [column for column in table.key if column != table.position]
+    return [
+        evolve(row, **{table.position: position})
+        for _, children in groupby(rows, key=lambda r: [getattr(r, c) for c in parent])
+        for position, row in enumerate(children)
+    ]
 
 
-def _record(table: Table, row: object) -> dict[str, str]:
-    data = CONVERTER.unstructure(row)
-    return {
-        column: "" if data.get(column) is None else str(data[column])
-        for column in table.columns()
-    }
-
-
-def dump(registry: Registry, path: Path, renumber: bool = True) -> None:
+def dump(db: Registry, path: Path) -> None:
     """Write a registry to a project folder (created if needed)."""
     path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
     for table in TABLES:
         with open(path / f"{table.name}.csv", "w", newline="", encoding="utf-8") as file:
-            writer = csv.DictWriter(
-                file,
-                fieldnames=table.columns(),
-                lineterminator="\n",
-            )
+            writer = csv.DictWriter(file, fieldnames=table.columns(), lineterminator="\n")
             writer.writeheader()
-            writer.writerows(
-                _record(table, row)
-                for row in _rows_for_dump(table, registry[table.name], renumber)
-            )
+            for row in _renumbered(table, select(db, table.name)):
+                data = CONVERTER.unstructure(row)
+                writer.writerow({c: data.get(c, "") for c in table.columns()})
     (path / DATAPACKAGE_FILE).write_text(datapackage_yaml(), encoding="utf-8")
 
 
@@ -204,67 +160,49 @@ def dump(registry: Registry, path: Path, renumber: bool = True) -> None:
 """
 
 
-def _to_violation(table_name: str, error) -> Violation:
-    row_number = getattr(error, "row_number", None)
-    note = f"row {row_number}: {error.note}" if row_number else error.note
-    column = getattr(error, "field_name", None)
-    if error.type == "primary-key":
-        kind = "key"
-    elif error.type == "foreign-key":
-        kind = "ref"
-        column = (getattr(error, "field_names", None) or [None])[0]
-    elif error.type == "constraint-error" and '"enum"' in error.note:
-        kind = "enum"
-    else:
-        kind = "file"
-    return Violation(table=table_name, key=(), column=column, kind=kind, note=note)
-
-
-def file_violations(path: Path) -> list[Violation]:
-    """Frictionless validation of the raw files, against the generated schema."""
-    package = Package(to_datapackage(), basepath=str(Path(path)))
-    report = package.validate()
-    violations = [
-        Violation(table="datapackage", key=(), column=None, kind="file", note=error.note)
-        for error in report.errors
-    ]
-    for task in report.tasks:
-        violations.extend(_to_violation(task.name, error) for error in task.errors)
-    return violations
-
-
-def _read_registry(path: Path) -> Registry:
-    tables = {}
-    for table in TABLES:
-        structure_as = table.row_type.__value__ if table.is_union else table.row_type
-        rows = []
-        with open(Path(path) / f"{table.name}.csv", newline="", encoding="utf-8") as file:
-            for row_number, record in enumerate(csv.DictReader(file), start=2):
-                try:
-                    rows.append(CONVERTER.structure(record, structure_as))
-                except Exception as error:
-                    raise ProjectError(
-                        f"{table.name}.csv row {row_number}: could not read row: {error}"
-                    ) from error
-        tables[table.name] = tuple(rows)
-    return frozendict(tables)
-
-
-def validate_project(path: Path) -> list[Violation]:
-    """All violations of a project folder: raw files first, then `check()`."""
+def _load(path: Path) -> tuple[Registry, list[Violation]]:
     path = Path(path)
     if not is_project(path):
         raise ProjectError(f"{path} is not a kayino project (no {DATAPACKAGE_FILE})")
-    if violations := file_violations(path):
-        return violations
-    return check(_read_registry(path))
+    db = connect(seed=False)
+    violations = []
+    db.execute("BEGIN")
+    for table in TABLES:
+        file = path / f"{table.name}.csv"
+        if not file.is_file():
+            violations.append(Violation(table.name, (), None, "file", f"missing {file.name}"))
+            continue
+        with open(file, newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            if missing := set(table.columns()) - set(reader.fieldnames or ()):
+                violations.append(
+                    Violation(table.name, (), None, "file", f"missing columns {sorted(missing)}")
+                )
+                continue
+            for row_number, record in enumerate(reader, start=2):
+                try:
+                    insert_record(db, table, record)
+                except RegistryCheckError as error:
+                    violations += [
+                        evolve(v, note=f"row {row_number}: {v.note}") for v in error.violations
+                    ]
+    if not violations:
+        violations = check(db)
+    db.execute("ROLLBACK" if violations else "COMMIT")
+    return db, violations
+
+
+def validate_project(path: Path) -> list[Violation]:
+    """Every violation in a project folder (empty if it is valid)."""
+    return _load(path)[1]
 
 
 def load(path: Path) -> Registry:
     """Read a project folder. Refuses (with every violation) if it is invalid."""
-    if violations := validate_project(path):
+    db, violations = _load(path)
+    if violations:
         raise RegistryCheckError(violations)
-    return _read_registry(Path(path))
+    return db
 
 
 """
@@ -278,7 +216,7 @@ EXPORT_COLUMNS = ("text_id", "spec_name", "input", "string", "status", "payload"
 
 
 def export(
-    registry: Registry,
+    db: Registry,
     spec_name: str,
     out_path: Path,
     project_dir: Path | None = None,
@@ -295,14 +233,14 @@ def export(
         and out_path.name in _package_files()
     ):
         raise ProjectError(f"{out_path} is part of the project's data package")
-    spec = fetch_struct(NormalizationSpec.__name__, "name", spec_name, registry)
+    spec = fetch(db, NormalizationSpec.__name__, name=spec_name)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    texts = get_structs(Text.__name__, registry)
+    texts = select(db, Text.__name__)
     with open(out_path, "w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=EXPORT_COLUMNS, lineterminator="\n")
         writer.writeheader()
         for text in texts:
-            output, status, payload = normalize(text.string, spec, registry)
+            output, status, payload = normalize(text.string, spec, db)
             result = NormalizedText(
                 string=output,
                 text_id=text.id,

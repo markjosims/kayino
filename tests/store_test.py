@@ -9,22 +9,20 @@ from pathlib import Path
 import pytest
 from frictionless import Package
 
-from check_test import VIOLATIONS, registry_from_case
+from check_test import VIOLATIONS
+from helpers import run, snapshot, write_project
 from kayino.models import RegistryCheckError
-from kayino.repl.commands import repl_turn
 from kayino.repl.grammar import create_grammar
-from kayino.repl.models import ReplState
 from kayino.store import (
     DATAPACKAGE_FILE,
     ProjectError,
     datapackage_yaml,
     dump,
-    file_violations,
     load,
     to_datapackage,
     validate_project,
 )
-from kayino.structs import build_struct, group_members, init_registry
+from kayino.structs import change, connect, insert, select
 
 SNAPSHOT = Path(__file__).parent / "test_cases" / "datapackage.snapshot.yaml"
 
@@ -43,62 +41,77 @@ def test_datapackage_is_a_valid_descriptor():
 
 
 def _sample_registry():
-    registry = init_registry()
-    for name in ["a", "b", "ch"]:
-        _, registry = build_struct("Token", registry, name=name)
-    _, registry = build_struct("TokenGroup", registry, name="<V>")
-    for position, token in enumerate(["a", "ch"]):
-        _, registry = build_struct(
-            "GroupMember", registry, group="<V>", position=position, token=token
-        )
-    _, registry = build_struct("Pattern", registry, name="<P>", value="ab")
-    _, registry = build_struct("MappingNorm", registry, name="m", description="d")
-    for intab, outtab in [("x", ""), ("́", ""), (" ", "_"), ("a ", " b"), ('q"', "1-2")]:
-        _, registry = build_struct("MappingRow", registry, norm="m", intab=intab, outtab=outtab)
-    _, registry = build_struct(
-        "CdrewriteNorm", registry, name="r", input_str="", output_str="h", left_context="a"
-    )
-    _, registry = build_struct("NormalizationSpec", registry, name="s")
-    _, registry = build_struct("SpecStep", registry, spec="s", position=0, step="lowercase")
-    _, registry = build_struct("SpecStep", registry, spec="s", position=1, step="m")
-    _, registry = build_struct("SpecPattern", registry, spec="s", pattern="<P>")
-    _, registry = build_struct("Text", registry, string=" Hi, \"there\" é ")
-    return registry
+    db = connect()
+    with change(db):
+        for name in ["a", "b", "ch"]:
+            insert(db, "Token", name=name)
+        insert(db, "TokenGroup", name="<V>")
+        for position, token in enumerate(["a", "ch"]):
+            insert(db, "GroupMember", group="<V>", position=position, token=token)
+        insert(db, "Pattern", name="<P>", value="ab")
+        insert(db, "MappingNorm", name="m", description="d")
+        for intab, outtab in [("x", ""), ("\u0301", ""), (" ", "_"), ("a ", " b"), ('q"', "1-2")]:
+            insert(db, "MappingRow", norm="m", intab=intab, outtab=outtab)
+        insert(db, "CdrewriteNorm", name="r", input_str="", output_str="h", left_context="a")
+        insert(db, "NormalizationSpec", name="s")
+        insert(db, "SpecStep", spec="s", position=0, step="lowercase")
+        insert(db, "SpecStep", spec="s", position=1, step="m")
+        insert(db, "SpecPattern", spec="s", pattern="<P>")
+        insert(db, "Text", string=' Hi, "there" e\u0301 ')
+    return db
 
 
 def test_round_trip(tmp_path):
-    registry = _sample_registry()
-    dump(registry, tmp_path)
+    db = _sample_registry()
+    dump(db, tmp_path)
     assert validate_project(tmp_path) == []
-    assert load(tmp_path) == registry
+    assert snapshot(load(tmp_path)) == snapshot(db)
 
 
 def test_dump_renumbers_positions(tmp_path):
-    registry = init_registry()
-    for name in ["a", "b", "c"]:
-        _, registry = build_struct("Token", registry, name=name)
-    _, registry = build_struct("TokenGroup", registry, name="<V>")
-    for position, token in [(7, "c"), (2, "a"), (5, "b")]:
-        _, registry = build_struct(
-            "GroupMember", registry, group="<V>", position=position, token=token
-        )
-    dump(registry, tmp_path)
+    db = connect()
+    with change(db):
+        for name in ["a", "b", "c"]:
+            insert(db, "Token", name=name)
+        insert(db, "TokenGroup", name="<V>")
+        for position, token in [(7, "c"), (2, "a"), (5, "b")]:
+            insert(db, "GroupMember", group="<V>", position=position, token=token)
+    dump(db, tmp_path)
     with open(tmp_path / "group_members.csv", encoding="utf-8") as file:
         rows = list(csv.DictReader(file))
     assert [(r["position"], r["token"]) for r in rows] == [("0", "a"), ("1", "b"), ("2", "c")]
-    assert group_members(load(tmp_path), "<V>") == ("a", "b", "c")
+    assert [m.token for m in select(load(tmp_path), "GroupMember", group="<V>")] == ["a", "b", "c"]
+
+
+def _frictionless_violations(path: Path) -> set[tuple]:
+    """(table, kind, column) for each error Frictionless reports on a folder."""
+    report = Package(to_datapackage(), basepath=str(path)).validate()
+    found = set()
+    for task in report.tasks:
+        for error in task.errors:
+            column = getattr(error, "field_name", None)
+            if error.type == "primary-key":
+                kind = "key"
+            elif error.type == "foreign-key":
+                kind, column = "ref", error.field_names[0]
+            elif error.type == "constraint-error" and '"enum"' in error.note:
+                kind = "enum"
+            else:
+                kind = "file"
+            found.add((task.name, kind, column))
+    return found
 
 
 @pytest.mark.parametrize("case", VIOLATIONS, ids=[case["id"] for case in VIOLATIONS])
-def test_frictionless_agrees_with_check(case, tmp_path):
+def test_datapackage_agrees_with_sqlite(case, tmp_path):
     """
-    The generated schema enforces the same keys, plain refs and enums as
-    check() does in memory. (Kind-restricted refs and custom checks are
-    check()-only, which the "frictionless" field of each case records.)
+    Other tools validating the folder with the generated datapackage.yaml
+    see the same keys, plain refs and enums as kayino does. (Kind-restricted
+    refs and custom checks are kayino-only, which the "frictionless" field of
+    each case records.)
     """
-    dump(registry_from_case(case), tmp_path, renumber=False)
-    found = {(v.table, v.kind, v.column) for v in file_violations(tmp_path)}
-    assert found == {tuple(expected) for expected in case["frictionless"]}
+    write_project(tmp_path, case["rows"])
+    assert _frictionless_violations(tmp_path) == {tuple(e) for e in case["frictionless"]}
 
 
 def _edit_csv(path: Path, table: str, transform) -> None:
@@ -110,7 +123,7 @@ def _edit_csv(path: Path, table: str, transform) -> None:
     "table, transform, expected",
     [
         ("symbols", lambda text: text + "a,token,\n", ("symbols", "key", None)),
-        ("group_members", lambda text: text.replace(",1,ch", ",x,ch"), ("group_members", "file", "position")),
+        ("group_members", lambda text: text.replace(",1,ch", ",x,ch"), ("group_members", "type", "position")),
         ("group_members", lambda text: text.replace(",ch\n", ",zz\n"), ("group_members", "ref", "token")),
         ("symbols", lambda text: text.replace("<P>,pattern,ab", "<P>,pattern,abzz"), ("symbols", "custom", "value")),
         ("group_members", lambda text: text.replace(",a\n", ",<P>\n"), ("group_members", "ref", "token")),
@@ -174,15 +187,6 @@ def grammar():
     return create_grammar()
 
 
-def run(commands: list[str], grammar, state: ReplState | None = None):
-    state = state or ReplState()
-    messages = []
-    for command in commands:
-        message, state = repl_turn(command, state, grammar)
-        messages.append(str(message))
-    return messages, state
-
-
 def test_init_save_load_validate(tmp_path, grammar):
     project = tmp_path / "proj"
     messages, state = run(
@@ -192,13 +196,13 @@ def test_init_save_load_validate(tmp_path, grammar):
     assert messages[-1] == f"Saved to {project}"
 
     messages, loaded = run([f"load {project}", "validate"], grammar)
-    assert loaded.registry == state.registry
+    assert snapshot(loaded.db) == snapshot(state.db)
     assert messages[-1] == f"{project} is valid"
 
     _edit_csv(project, "group_members", lambda text: text.replace(",a\n", ",zz\n"))
     messages, _ = run(["validate"], grammar, loaded)
     assert "has problems" in messages[-1]
-    assert "group_members.token" in messages[-1]
+    assert "group_members ('<V>', 0).token: 'zz' not found" in messages[-1]
 
 
 def test_init_refuses_non_empty_folder(tmp_path, grammar):

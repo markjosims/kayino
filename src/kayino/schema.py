@@ -15,7 +15,7 @@ This module has no knowledge of the concrete Kayino structs. See
 
 import functools
 import typing
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import Literal, TypeAliasType, get_args, get_origin
 
 import attrs
@@ -144,10 +144,6 @@ class Table:
                     found[attribute.name] = ref_
         return found
 
-    def key_of(self, row: object) -> tuple:
-        """The values of `row`'s key columns."""
-        return tuple(getattr(row, column) for column in self.key)
-
     def kinds(self) -> tuple[str, ...]:
         """The `kind` values of this table's row classes (empty if none)."""
         return tuple(
@@ -250,27 +246,22 @@ def check_tables(tables: Sequence[Table]) -> list[str]:
 
 
 """
-## Registry checking
+## Violations
 
-A generic check of a registry (table name -> tuple of rows) against the
-declarations: keys are unique, refs resolve (with the right `kind`), and
-`Literal` fields hold allowed values. Checks that need Kayino-specific
-knowledge (e.g. patterns compile) live in `kayino.structs.CUSTOM_CHECKS`.
+What a refused change or an invalid project folder reports.
 """
 
-# "file": problems only raw files can have (bad integer, missing CSV, ...),
-# reported by Frictionless at the file boundary (see kayino.store).
-ViolationKind = Literal["key", "ref", "enum", "custom", "file"]
+ViolationKind = Literal["key", "ref", "enum", "required", "type", "custom", "file"]
 
 
 @frozen
 class Violation:
     """
-    One way a registry breaks its declared constraints.
+    One way the data breaks its declared constraints.
 
     Attributes:
       table:  Table containing the offending row.
-      key:    The offending row's key values.
+      key:    The offending row's key values (empty when unknown).
       column: The offending column, or None for a whole-row problem.
       kind:   Which kind of constraint was broken.
       note:   Human-readable explanation.
@@ -288,92 +279,103 @@ class Violation:
         return f"{self.table}{key}{column}: {self.note}"
 
 
+"""
+## Column types
+
+Derived from the resolved annotations of a table's row classes.
+"""
+
+
 @functools.cache
 def type_hints(cls: type) -> dict[str, object]:
     """Resolved field annotations (works with `from __future__ import annotations`)."""
     return typing.get_type_hints(cls)
 
 
-@functools.cache
-def literal_fields(cls: type) -> dict[str, tuple]:
-    """Fields of an attrs class annotated with `Literal[...]`, and their values."""
-    hints = type_hints(cls)
-    return {
-        name: get_args(hint)
-        for name, hint in hints.items()
-        if get_origin(hint) is Literal
+def _hints(table: Table, column: str) -> list:
+    return [h for cls in table.row_classes if (h := type_hints(cls).get(column)) is not None]
+
+
+def is_integer_column(table: Table, column: str) -> bool:
+    """`int` and `int | None` columns."""
+    return any(hint is int or int in get_args(hint) for hint in _hints(table, column))
+
+
+def column_enum(table: Table, column: str) -> tuple:
+    """Allowed values of a `Literal[...]` column (merged across union members)."""
+    values: dict = {}
+    for hint in _hints(table, column):
+        if get_origin(hint) is Literal:
+            values.update(dict.fromkeys(get_args(hint)))
+    return tuple(values)
+
+
+"""
+## SQLite schema
+
+Each table becomes a STRICT SQLite table. Keys become PRIMARY KEYs, enums
+named CHECKs, refs deferred FOREIGN KEYs with ON UPDATE CASCADE (renames
+propagate) and ON DELETE CASCADE or NO ACTION (restrict, checked at the end
+of the change). A ref restricted to a `kind` adds a hidden constant column
+`<column>__kind`, so the foreign key is (value, kind) -> (name, kind).
+"""
+
+KIND_SUFFIX = "__kind"
+
+
+def _q(name: str) -> str:
+    return f'"{name}"'
+
+
+def columns_sql(columns) -> str:
+    return ", ".join(map(_q, columns))
+
+
+def ddl(tables: Sequence[Table]) -> str:
+    kinded_targets = {
+        (ref_.table, ref_.column)
+        for table in tables
+        for ref_ in table.refs().values()
+        if ref_.kind
     }
-
-
-def check_registry(
-    registry: Mapping[str, Sequence[object]],
-    tables: Sequence[Table],
-) -> list[Violation]:
-    violations: list[Violation] = []
-    by_name = {table.name: table for table in tables}
-
+    statements = []
     for table in tables:
-        rows = registry.get(table.name, ())
-        seen_keys: set[tuple] = set()
-        for row in rows:
-            key = table.key_of(row)
-            if key in seen_keys:
-                violations.append(
-                    Violation(
-                        table=table.name,
-                        key=key,
-                        column=None,
-                        kind="key",
-                        note=f"duplicate key ({', '.join(table.key)})",
-                    )
-                )
-            seen_keys.add(key)
-            for column, allowed in literal_fields(type(row)).items():
-                value = getattr(row, column)
-                if value not in allowed:
-                    violations.append(
-                        Violation(
-                            table=table.name,
-                            key=key,
-                            column=column,
-                            kind="enum",
-                            note=f"{value!r} is not one of {allowed}",
-                        )
-                    )
-
-    # (table, column) -> {value: row}, built lazily per referenced column
-    indexes: dict[tuple[str, str], dict[object, object]] = {}
-    for table in tables:
+        integer_key = len(table.key) == 1 and is_integer_column(table, table.key[0])
+        lines = []
+        for column in table.columns():
+            if integer_key and column == table.key[0]:
+                lines.append(f"{_q(column)} INTEGER PRIMARY KEY")
+                continue
+            integer = is_integer_column(table, column)
+            line = f"{_q(column)} {'INTEGER' if integer else 'TEXT'} NOT NULL"
+            if enum := column_enum(table, column):
+                allowed = ", ".join(f"'{value}'" for value in enum)
+                line += f" CONSTRAINT {_q('enum_' + column)} CHECK ({_q(column)} IN ({allowed}))"
+            elif column in table.key and not integer:
+                line += f" CONSTRAINT {_q('required_' + column)} CHECK ({_q(column)} <> '')"
+            lines.append(line)
         for column, ref_ in table.refs().items():
-            index_key = (ref_.table, ref_.column)
-            if index_key not in indexes:
-                indexes[index_key] = {
-                    getattr(target, ref_.column): target
-                    for target in registry.get(ref_.table, ())
-                }
-            index = indexes[index_key]
-            for row in registry.get(table.name, ()):
-                if not hasattr(row, column):
-                    # union member without this column
-                    continue
-                value = getattr(row, column)
-                target = index.get(value)
-                if target is None:
-                    note = f"{value!r} not found in {ref_.table}.{ref_.column}"
-                elif ref_.kind is not None and getattr(target, "kind", None) != ref_.kind:
-                    note = (
-                        f"{value!r} is a {getattr(target, 'kind', None)}, "
-                        f"not a {ref_.kind}, in {ref_.table}"
-                    )
-                else:
-                    continue
-                violations.append(
-                    Violation(
-                        table=table.name,
-                        key=by_name[table.name].key_of(row),
-                        column=column,
-                        kind="ref",
-                        note=note,
-                    )
+            if ref_.kind:
+                hidden = _q(column + KIND_SUFFIX)
+                lines.append(
+                    f"{hidden} TEXT NOT NULL DEFAULT '{ref_.kind}' "
+                    f"CHECK ({hidden} = '{ref_.kind}')"
                 )
-    return violations
+        if not integer_key:
+            lines.append(f"PRIMARY KEY ({columns_sql(table.key)})")
+        for target_table, target_column in sorted(kinded_targets):
+            if target_table == table.name:
+                lines.append(f"UNIQUE ({columns_sql([target_column, 'kind'])})")
+        for column, ref_ in table.refs().items():
+            child = [column, column + KIND_SUFFIX] if ref_.kind else [column]
+            parent = [ref_.column, "kind"] if ref_.kind else [ref_.column]
+            on_delete = "CASCADE" if ref_.on_delete == "cascade" else "NO ACTION"
+            lines.append(
+                f"FOREIGN KEY ({columns_sql(child)}) "
+                f"REFERENCES {_q(ref_.table)} ({columns_sql(parent)}) "
+                f"ON UPDATE CASCADE ON DELETE {on_delete} DEFERRABLE INITIALLY DEFERRED"
+            )
+        statements.append(
+            f"CREATE TABLE {_q(table.name)} (\n  " + ",\n  ".join(lines) + "\n) STRICT;"
+        )
+    return "\n\n".join(statements)
