@@ -1,9 +1,12 @@
-{"user_input":"add tok foo","expected_kwargs":{"verb":"add","struct":"Token","string":"foo"}} 
-{"user_input":"remove tok foo","expected_kwargs":{"verb":"remove","struct":"Token","string":"foo"}} 
-{"user_input":"remove tkg <foo>","expected_kwargs":{"verb":"remove","struct":"TokenGroup","string":"<foo>"}} 
-{"user_input":"remove tkg <foo> ","expected_kwargs":{"verb":"remove","struct":"TokenGroup","string":"<foo>"}} 
+{"user_input":"add tok foo","expected_kwargs":{"verb":"add","struct":"Token","name":"foo"}} 
+{"user_input":"remove tok foo","expected_kwargs":{"verb":"remove","struct":"Token","name":"foo"}} 
+{"user_input":"remove tkg <foo>","expected_kwargs":{"verb":"remove","struct":"TokenGroup","name":"<foo>"}} 
+{"user_input":"remove tkg <foo> ","expected_kwargs":{"verb":"remove","struct":"TokenGroup","name":"<foo>"}} 
 {"user_input":"add map foo a > b; b > c","expected_kwargs":{"verb":"add","struct":"MappingNorm","name":"foo","mapping":[["a","b"],["b","c"]]}} 
 {"user_input":"add map foo a > b; b > c;","expected_kwargs":{"verb":"add","struct":"MappingNorm","name":"foo","mapping":[["a","b"],["b","c"]]}} 
 {"user_input":"add map foo a > b ;   b > c;  ","expected_kwargs":{"verb":"add","struct":"MappingNorm","name":"foo","mapping":[["a","b"],["b","c"]]}} 
 {"user_input":"add map foo a > b","expected_kwargs":{"verb":"add","struct":"MappingNorm","name":"foo","mapping":[["a","b"]]}} 
 {"user_input":"add map foo a >   b ","expected_kwargs":{"verb":"add","struct":"MappingNorm","name":"foo","mapping":[["a","b"]]}} 
+{"user_input":"rename tok a b","expected_kwargs":{"verb":"rename","struct":"Token","old":"a","new":"b"}}
+{"user_input":"mv tkg <V> <W>","expected_kwargs":{"verb":"rename","struct":"TokenGroup","old":"<V>","new":"<W>"}}
+{"user_input":"mv spec s t","expected_kwargs":{"verb":"rename","struct":"NormalizationSpec","old":"s","new":"t"}}

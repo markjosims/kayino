@@ -2,8 +2,6 @@
 Entrypoint for Kayino REPL.
 """
 
-from pathlib import Path
-
 import prompt_toolkit
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.contrib.regular_languages.completion import GrammarCompleter
@@ -15,10 +13,6 @@ from kayino.repl.commands import repl_turn
 from kayino.repl.grammar import create_grammar
 from kayino.repl.models import ReplState
 from kayino.repl.styles import INPUT_STYLES
-
-_state_cache_dir = Path(".cache")
-_state_cache_dir.mkdir(exist_ok=True)
-
 
 def repl():
     session = prompt_toolkit.PromptSession()

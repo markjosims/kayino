@@ -1,18 +1,22 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from enum import Enum
-from typing import Literal, TypeAliasType, get_args
+from typing import Literal
 
-from attrs import Factory, fields, frozen
+import attrs
+from attrs import Factory, frozen
 from frozendict import frozendict
+
+from kayino.schema import Table, Violation, make_converter, ref
 
 """
 ## RegistryType
 
 All structs for a given Kayino state are stored in a registry,
-which is implemented as a dictionary mapping the name of a struct
-type to an array of structs.
+which is implemented as a dictionary mapping a table name (see `TABLES`
+below) to a tuple of structs, i.e. the table's rows.
 """
 
 Registry = frozendict[str, tuple[object, ...]]
@@ -20,52 +24,76 @@ Registry = frozendict[str, tuple[object, ...]]
 """
 ## Struct definitions
 
-All data structs used in Kayino.
+All data structs used in Kayino. Every struct stored in the registry is
+shaped like one table row: no tuple/dict fields. Nested data (a group's
+members, a mapping's pairs, a spec's steps) lives in child row types that
+reference their parent with `ref(...)`. Use the query helpers in
+`kayino.structs` to get the nested views.
 
-### Token and pattern structs
+### Symbols: tokens, token groups and patterns
 
-Structs for storing individual token strings (each corresponding
-to a unique symbol in a pynini.SymbolTable), groups of tokens and
-named patterns.
+All three live in the `symbols` table, distinguished by `kind`, so that
+names are unique across all of them.
 """
 
 
 @frozen
 class Token:
     """
-    A named token and its ID in the symbol table.
+    A single token. Its label in the pynini SymbolTable is derived from
+    token order at compile time (see `acceptor.symbol_table_for_tokens`).
     """
 
-    string: str
-    id: int
+    name: str
+    kind: Literal["token"] = "token"
 
 
 @frozen
 class AnonToken:
+    """
+    A substring of a pattern string that is not a registered symbol: either
+    a regex operator or an unrecognized string. Never stored in the registry.
+    """
+
     string: str
     kind: Literal["unrecognized", "operator"]
 
 
 @frozen
 class TokenGroup:
+    """
+    A named set of tokens. Members are `GroupMember` rows.
+    """
+
     name: str
-    members: tuple[int, ...]
+    kind: Literal["group"] = "group"
 
 
 @frozen
 class Pattern:
     name: str
     value: str
+    kind: Literal["pattern"] = "pattern"
 
+
+type Symbol = Token | TokenGroup | Pattern
 
 type TokenLike = Token | AnonToken | TokenGroup | Pattern
+
+
+@frozen
+class GroupMember:
+    group: str = ref("symbols", kind="group", on_delete="cascade")
+    position: int
+    token: str = ref("symbols", kind="token")
+
 
 """
 ### Norm
 
 A function that maps a string to a normalized output string.
 The struct data itself must be JSON serializable, so each
-type of norm function defines the data fields needed to interpret 
+type of norm function defines the data fields needed to interpret
 the function.
 """
 
@@ -86,35 +114,32 @@ class PrebuiltNorm:
 @frozen
 class MappingNorm:
     """
-    A mapping of intab -> outtab strings.
+    A mapping of intab -> outtab strings. The pairs are `MappingRow` rows.
     """
 
     name: str
-    data: frozendict[str, str] = Factory(frozendict)
     description: str = ""
     kind: Literal["mapping"] = "mapping"
 
 
 @frozen
-class CdrewriteArgs:
-    """
-    Input arguments for pynini.cdrewrite.
-    """
-
-    input_str: str = ""
-    output_str: str = ""
-    left_context: str = ""
-    right_context: str = ""
+class MappingRow:
+    norm: str = ref("norm_steps", kind="mapping", on_delete="cascade")
+    intab: str
+    outtab: str
 
 
 @frozen
 class CdrewriteNorm:
     """
-    A contextual rewrite rule.
+    A contextual rewrite rule: the arguments to pynini.cdrewrite.
     """
 
     name: str
-    data: CdrewriteArgs
+    input_str: str = ""
+    output_str: str = ""
+    left_context: str = ""
+    right_context: str = ""
     description: str = ""
     kind: Literal["cdrewrite"] = "cdrewrite"
 
@@ -123,17 +148,34 @@ class CdrewriteNorm:
 type NormStep = PrebuiltNorm | MappingNorm | CdrewriteNorm
 
 
+"""
+### Normalization specs
+"""
+
+
 @frozen
 class NormalizationSpec:
     """
-    An ordered list of normalization functions defining a language's textnorm
-    pipeline, and an array of patterns whose union defines the set of all
-    valid strings for a given language.
+    An ordered list of normalization steps defining a language's textnorm
+    pipeline (`SpecStep` rows), and a set of patterns whose union defines
+    the set of all valid strings for a given language (`SpecPattern` rows).
     """
 
     name: str
-    steps: tuple[str, ...] = Factory(tuple)
-    licit_patterns: tuple[str, ...] = Factory(tuple)
+    description: str = ""
+
+
+@frozen
+class SpecStep:
+    spec: str = ref("specs", on_delete="cascade")
+    position: int
+    step: str = ref("norm_steps")
+
+
+@frozen
+class SpecPattern:
+    spec: str = ref("specs", on_delete="cascade")
+    pattern: str = ref("symbols", kind="pattern")
 
 
 # Status indicating whether a string conforms to the constraints
@@ -165,6 +207,7 @@ class Text:
 class NormalizedText:
     """
     The output of some normalization spec and a status value.
+    Derived data: not stored in the registry (see the `export` command).
     """
 
     string: str
@@ -174,9 +217,65 @@ class NormalizedText:
 
 
 """
-## Name->type mapping for all structs
+## Tables
+
+The single source of truth for how structs are stored. Order matters:
+referenced tables come before the tables that reference them.
 """
 
+TABLES: tuple[Table, ...] = (
+    Table("symbols", Symbol, key=("name",)),
+    Table(
+        "group_members",
+        GroupMember,
+        key=("group", "position"),
+        position="position",
+    ),
+    Table("norm_steps", NormStep, key=("name",)),
+    Table("mapping_rows", MappingRow, key=("norm", "intab")),
+    Table("specs", NormalizationSpec, key=("name",)),
+    Table("spec_steps", SpecStep, key=("spec", "position"), position="position"),
+    Table("spec_patterns", SpecPattern, key=("spec", "pattern")),
+    Table("texts", Text, key=("id",)),
+)
+
+CONVERTER = make_converter(TABLES)
+
+"""
+## Lookups derived from TABLES
+"""
+
+TABLE_BY_NAME: dict[str, Table] = {table.name: table for table in TABLES}
+
+# Row class name or union alias name -> table
+_TABLE_BY_TYPE_NAME: dict[str, Table] = {}
+# Row class name or union alias name -> class or alias
+_ROW_TYPE_BY_NAME: dict[str, object] = {}
+for _table in TABLES:
+    _TABLE_BY_TYPE_NAME[_table.type_name] = _table
+    _ROW_TYPE_BY_NAME[_table.type_name] = _table.row_type
+    for _cls in _table.row_classes:
+        _TABLE_BY_TYPE_NAME[_cls.__name__] = _table
+        _ROW_TYPE_BY_NAME[_cls.__name__] = _cls
+
+
+def table_for(name: str) -> Table:
+    """
+    Resolve a table name, row class name or union alias name to its table.
+    """
+    if name in TABLE_BY_NAME:
+        return TABLE_BY_NAME[name]
+    return _TABLE_BY_TYPE_NAME[name]
+
+
+def row_type_for(name: str) -> object:
+    """Resolve a row class name or union alias name to the class or alias."""
+    return _ROW_TYPE_BY_NAME[name]
+
+
+# Struct types users address directly in the REPL (`add`, `remove`, `list`).
+# Child row types (GroupMember, MappingRow, SpecStep, SpecPattern) are managed
+# through their parents and are deliberately absent.
 NAME_TO_STRUCT = {
     struct_type.__name__: struct_type
     for struct_type in [
@@ -189,34 +288,20 @@ NAME_TO_STRUCT = {
         CdrewriteNorm,
         NormalizationSpec,
         Text,
-        NormalizedText,
     ]
 }
 
 
-TYPE_TO_UNION = {}
-for union_type in (NormStep,):
-    for subtype in get_args(union_type.__value__):
-        TYPE_TO_UNION[subtype.__name__] = union_type.__name__
-
-
-def resolve_struct_type_name(struct_type_name: str) -> str:
-    macro_type = TYPE_TO_UNION.get(
-        struct_type_name,
-        struct_type_name,
-    )
-    return macro_type
-
-
 def resolve_struct_type_fields(struct_type_name: str) -> list[str]:
-    struct_type = NAME_TO_STRUCT[struct_type_name]
-    if isinstance(struct_type, TypeAliasType):
-        struct_type = struct_type.__value__
-        subtypes = get_args(struct_type)
-        type_fields = set(field.name for member in subtypes for field in fields(member))
-        type_fields = sorted(type_fields)
-        return type_fields
-    return sorted(field.name for field in fields(struct_type))
+    """
+    Field names for a struct type name. For a table or union alias name,
+    this is every column of the table.
+    """
+    if struct_type_name in TABLE_BY_NAME or struct_type_name in (
+        table.type_name for table in TABLES if table.is_union
+    ):
+        return list(table_for(struct_type_name).columns())
+    return [a.name for a in attrs.fields(row_type_for(struct_type_name))]
 
 
 """
@@ -271,13 +356,24 @@ class StructNotFoundError(KayinoError):
     pass
 
 
-class MalformedStructArrayError(KayinoError):
-    pass
+class RegistryCheckError(KayinoError):
+    """
+    A change would leave the registry violating its declared constraints.
+    The REPL keeps the previous state.
+    """
+
+    def __init__(self, violations: Sequence[Violation]):
+        self.violations = tuple(violations)
+        super().__init__(
+            "\n".join(
+                ["registry check failed:"] + [f"  {v}" for v in self.violations]
+            )
+        )
 
 
-class FsaCompilationError(KayinoError):
-    pass
+class KeyChangeError(KayinoError):
+    """`replace_struct` was asked to change a key; use `rename_struct`."""
 
 
-class StructDependencyError(KayinoError):
+class RenameError(KayinoError):
     pass

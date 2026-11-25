@@ -8,12 +8,12 @@ The user is the developer of this project. Claude acts only as a **software cons
 
 ## Project
 
-Kayino is an interactive REPL for building a custom text normalization pipeline for a low-resource language. A pipeline is made of:
-1. prebuilt normalization functions (`src/kayino/prebuilt.py`),
-2. user-defined intab→outtab character/string mappings,
-3. (planned) `pynini.cdrewrite` context-dependent rewrite rules.
+Kayino is an interactive REPL for building a text normalization pipeline for a low-resource language. A pipeline (a *spec*) is an ordered list of norm steps:
+1. prebuilt functions (`src/kayino/prebuilt.py`),
+2. intab→outtab mappings,
+3. `pynini.cdrewrite` contextual rewrite rules.
 
-After normalization, the output is checked against a whitelist of tokens and a set of regex patterns that define well-formed text.
+Normalized output is meant to be checked against an inventory of tokens and licit patterns (not implemented yet: `normalize` always returns `licit`). A project is saved as a folder of CSV files plus a generated Frictionless `datapackage.yaml`. See `README.md` for user-facing docs and `docs/plans/frictionless-refactor.md` for the design history.
 
 ## Commands
 
@@ -24,26 +24,45 @@ uv sync                                   # install deps, including the dev grou
 uv run kayino                             # start the REPL (entry point: kayino:main)
 uv run pytest                             # run all tests
 uv run pytest tests/core_test.py::test_no_transitivity   # run a single test
-uv run pytest -k "ki cho"                 # filter parametrized cases by id
+uv run pytest -k "duplicate"              # filter parametrized cases by id
 ```
 
 No linter or formatter is configured.
 
 ## Architecture
 
-**`core.py`: the pure pipeline.** `NormalizationSpec` is a frozen attrs class holding `mappings`, `patterns`, `token_set` (all `frozendict[str, str]`) and `prebuilt_norms` (a tuple of registry keys). `normalize(text, spec)` runs in a fixed order: prebuilt functions (in tuple order), then mappings, then validation. It returns `(text, status, payload)`, where status is `licit`, `illicit_token` or `illicit_pattern`.
-- Mappings are applied in **one regex pass** with the longest key matched first (`sorted_intab_regex`). Rewrites therefore do not chain: output of one mapping is never re-matched by another. `tests/mapping_tests.jsonl` pins this down.
-- Token validation replaces every licit token (the *values* of `token_set`) with a sentinel, splits on it, and reports whatever is left over as illicit.
-- Pattern validation uses `re.match` (anchored at the start only) and returns the names of the patterns that matched.
+The data model is **relational and immutable**. Every stored struct is one table row (a frozen attrs class with no tuple/dict fields). The `Registry` is a `frozendict` mapping table name → tuple of rows. Every change returns a new registry, so a refused change simply leaves the old one in place.
 
-**`prebuilt.py`: the registry.** `PREBUILT_REGISTRY: dict[str, PrebuiltNormalizer]` (a NamedTuple of `func`, `name`, `description`) is filled at import time. `NormalizationSpec.prebuilt_norms` refers to entries by their key.
+**`schema.py`: generic table machinery** (knows nothing about kayino's structs).
+- `ref(table, column="name", kind=None, on_delete="restrict"|"cascade")` declares a reference in attrs field metadata. `kind` restricts the target row's `kind`.
+- `Table(name, row_type, key, position=None)`. `row_type` is a class or a PEP 695 union alias tagged on a `kind` field. `key` may span several columns: child tables have no id column, and their composite key *is* the constraint.
+- `check_registry(registry, tables)` → `list[Violation]`: unique keys, resolving refs (with kind), `Literal` enums from resolved type hints.
+- `make_converter` (cattrs, tagged unions on `kind`) and `check_tables` (sanity check of the declarations).
 
-**`repl.py`: the stateful shell.** `ReplState` (frozen attrs) holds *workspace* variables (`texts`, `patterns`, `token_set`, `mappings`) plus the *active* `spec: NormalizationSpec`. A name declared without the `spec` prefix goes to the workspace only. Only the `spec` fields affect `normalize`. All state changes return a new state through `attrs.evolve`.
-- Command dispatch: `handle_user_response` tries each `validate_*` function in turn. Each one regex-matches the input and returns `(message, new_state)` on a match, or `None` otherwise. To add a command, write a `validate_*` function and add it to that list.
-- Grammar: `[spec] (text|map|token|pattern) NAME = VALUE`, `print [spec] KIND[s]`, `norm[alize] TEXT|$textvar`, `save NAME`, `load NAME`.
-- `save`/`load` serialize the whole `ReplState` to JSON with cattrs, in `./.cache/NAME`. The directory is relative to the working directory and is created when `repl.py` is imported.
-- The REPL has no command yet for setting `spec.prebuilt_norms`.
+**`models.py`: the structs and `TABLES`, the single source of truth.** Tables: `symbols` (`Token | TokenGroup | Pattern`: one namespace for all three), `group_members`, `norm_steps` (`PrebuiltNorm | MappingNorm | CdrewriteNorm`), `mapping_rows`, `specs`, `spec_steps`, `spec_patterns`, `texts`. Nested data lives in child rows (`GroupMember`, `MappingRow`, `SpecStep`, `SpecPattern`) that reference their parent with `on_delete="cascade"`. Also: `CONVERTER`, `table_for(name)` (table, class or union name → `Table`), `row_type_for`, `NAME_TO_STRUCT` (the struct types the REPL addresses directly), and the error classes (`KayinoError`, `RegistryCheckError(violations)`, `KeyChangeError`, `RenameError`, ...). `NormalizedText` is derived output and is not a table.
+
+**`structs.py`: registry operations.** `build_struct` (cattrs structure + insert), `insert_struct`, `remove_struct` (cascades to owned rows; anything still referencing the row makes the check fail, i.e. restrict), `replace_struct` (keeps position, refuses key changes), and `rename_struct` (updates referencing columns and pattern strings, and refuses renames that would change how a pattern tokenizes). All of them end in `_commit`, which runs `check()` and raises `RegistryCheckError`. `check()` = the generic checks, then `CUSTOM_CHECKS` (patterns compile, prebuilt names exist) only if those pass. Nested views: `group_members`, `mapping`, `spec_steps`, `spec_patterns`, `next_position`. `get_structs(name, registry)` accepts a table, class or union name.
+
+**`acceptor.py`: tokenization and pattern → FSA.** `tokenize_str` splits by longest match over symbol names and regex operators. The pynini `SymbolTable` labels come from token order, starting at 1 (0 is epsilon). Patterns compile by recursive descent. Groups and pattern references are not compiled yet (`_group_or_pattern_to_fst` is a stub). It cannot import `structs` (import cycle), so it reads `registry["symbols"]` directly.
+
+**`core.py`: the pipeline.** `normalize(text, spec, registry)` applies the spec's steps in order with `apply_step(text, step, registry)`. Mappings are applied in **one regex pass**, longest intab first (`sorted_intab_regex`), so rewrites do not chain; `tests/test_cases/mapping_tests.jsonl` pins this down.
+
+**`store.py`: the project folder.** `dump`/`load` use one CSV per table, via cattrs with no per-table code. Dump groups child rows by parent and renumbers positions. `to_datapackage()`/`datapackage_yaml()` generate the Frictionless descriptor from `TABLES`; it is written on save but **never read back** (validation always uses the generated one). `validate_project(path)` = Frictionless on the raw files (`Violation(kind="file"|"key"|"ref"|"enum")`), then `check()`. `export` writes normalized outputs to a CSV outside the package. Frictionless is too slow for every command (~100–250 ms), which is why per-command checking is the in-memory `check()` (~1–2 ms).
+
+**`repl/`: the shell.**
+- `grammar.py` builds one prompt_toolkit grammar from per-struct regex templates. Struct shorthands: `tok`, `tkg`, `pat`, `map`, `rwr`, `spec`, `step`, `text`.
+- `commands.py` maps each verb to a `handle_*(kwargs, state) -> (message, new_state)`. `repl_turn` catches `KayinoError` and reports it. Any other exception ends the session.
+- `models.py`: `ReplState(registry, active_spec, project_dir)`.
+- To add a command: add a grammar template, write a `handle_*` and register it in `_verb_to_func`.
+
+Known bugs are marked with `# BUG:` comments in the source. `README.md` lists the user-visible ones.
 
 ## Tests
 
-`tests/core_test.py` is parametrized from `tests/mapping_tests.jsonl`. Each line is `{"text", "expected", "mappings"}`. Add mapping cases by adding lines there.
+Most tests are parametrized from JSONL files in `tests/test_cases/`. Add cases by adding lines.
+- `mapping_tests.jsonl`, `prebuilt_tests.jsonl` → `core_test.py`.
+- `command_tests.jsonl`, `argword_tests.jsonl` → `grammar_test.py` (parsed kwargs per input line).
+- `registry_violations.jsonl` → `check_test.py` and `store_test.py`. Each case has `rows` per table, `expected` (what `check()` reports, as `[table, kind, column]`) and `frictionless` (what Frictionless reports for the same rows on disk; kind-restricted refs and custom checks are `check()`-only).
+- `datapackage.snapshot.yaml` → `store_test.py`. Regenerate it after an intentional model change (the command is in the test's docstring).
+
+`commands_test.py`, `check_test.py` and `store_test.py` also drive the REPL end to end through `repl_turn`.

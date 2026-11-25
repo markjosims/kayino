@@ -1,250 +1,113 @@
 """
 # structs.py
-Helpers for building and editing structs.
+Helpers for building, editing and querying structs.
+
+The registry maps table names (see `kayino.models.TABLES`) to tuples of
+row structs. Functions that take a `struct_type_name` accept a table name,
+a row class name (e.g. "Token") or a union alias name (e.g. "NormStep").
+
+Every change goes through `_commit`, which runs `check()` on the new
+registry and raises `RegistryCheckError` if anything is violated. Because
+the registry is immutable, a failed change leaves the caller's registry
+untouched.
 """
 
-import functools
-from collections import defaultdict
 from collections.abc import Callable
-from typing import Literal
 
 from attrs import evolve
-from cattrs import structure
 from frozendict import frozendict
 
-from kayino.acceptor import fsa
+from kayino.acceptor import fsa, surface, tokenize_str
 from kayino.models import (
-    NAME_TO_STRUCT,
-    TYPE_TO_UNION,
+    CONVERTER,
+    TABLE_BY_NAME,
+    TABLES,
     DuplicateStructError,
-    FsaCompilationError,
-    MalformedStructArrayError,
-    MappingNorm,
-    NormalizationSpec,
-    NormStep,
+    KeyChangeError,
     Pattern,
+    PrebuiltNorm,
     Registry,
-    StructDependencyError,
+    RegistryCheckError,
+    RenameError,
     StructNotFoundError,
     Text,
     Token,
     TokenGroup,
-    resolve_struct_type_name,
+    row_type_for,
+    table_for,
 )
-from kayino.prebuilt import PREBUILT_NORMS
-
-# struct name -> list of hooks
-type StructHookType = dict[str, list[Callable]]
-
-# struct name -> struct field -> single hook
-type KeyedStructHookType = dict[str, dict[str, Callable]]
-
-# enumerated type for registry mutations
-type MutationType = Literal["update", "append", "pop"]
-
-# struct name -> struct field -> mutation type -> single hook
-type MutationStructHookType = dict[str, dict[str, dict[MutationType, Callable]]]
+from kayino.prebuilt import PREBUILT_NORM_FUNCS, PREBUILT_NORMS
+from kayino.schema import Violation, check_registry
 
 """
-## Struct validation hooks
+## Checking
 
-Functions to call when inserting or updating a struct.
-Each hooks takes the newly constructed struct, the name
-of the field to validate, and the registry containing
-all existing structs.
+`check()` runs the generic checks derived from `TABLES` (keys, refs, enums),
+then, only if those pass, the Kayino-specific `CUSTOM_CHECKS`.
 """
 
 
-def _validate_pattern_compiles(
-    struct: object,
-    field: str,
-    registry: Registry,
-):
-    try:
-        fsa(getattr(struct, field), registry)
-    except Exception as error:
-        raise FsaCompilationError(
-            f"Pattern string {getattr(struct, field)} could not be compiled "
-            "to an FSA, original error: " + str(error)
-        ) from error
-
-
-_struct_validation_hooks: StructHookType = defaultdict(list)
-_struct_validation_hooks[Pattern.__name__].append(
-    functools.partial(
-        _validate_pattern_compiles,
-        field="value",
-    ),
-)
-
-
-def validate_struct(
-    struct: object,
-    registry: Registry,
-):
-    for validation_func in _struct_validation_hooks[type(struct).__name__]:
-        validation_func(
-            struct=struct,
-            registry=registry,
-        )
-
-
-"""
-## Registry validation hooks
-
-Unlike struct validation hooks, registry validation hooks
-scope over all structs of a given type in the registry,
-and so take a struct_type_name argument rather than an instantiated
-struct.
-"""
-
-
-def _array_ids_contiguous(
-    struct_type_name: str,
-    field: str,
-    registry: Registry,
-):
-    id_array = [
-        getattr(struct, field) for struct in get_structs(struct_type_name, registry)
-    ]
-    if id_array != list(range(len(id_array))):
-        raise MalformedStructArrayError
-
-
-def _array_ids_unique(
-    struct_type_name: str,
-    field: str,
-    registry: Registry,
-    all_struct_types_checked: list[str] | None = None,
-):
-    if all_struct_types_checked is None:
-        id_array = [
-            getattr(struct, field) for struct in get_structs(struct_type_name, registry)
-        ]
-    else:
-        id_array = [
-            getattr(struct, field)
-            for checked_type in all_struct_types_checked
-            for struct in get_structs(checked_type, registry)
-        ]
-    if len(id_array) != len(set(id_array)):
-        raise MalformedStructArrayError
-
-
-_registry_validation_hooks: StructHookType = defaultdict(list)
-
-# Token, TokenGroup and Pattern structs all require
-# unique "string" field
-for string_struct in [Token, TokenGroup, Pattern]:
-    unique_string_func = functools.partial(
-        _array_ids_unique,
-        field="string",
-        all_struct_types_checked=(
-            Token.__name__,
-            TokenGroup.__name__,
-            Pattern.__name__,
-        ),
-    )
-    _registry_validation_hooks[string_struct.__name__].append(unique_string_func)
-
-# No need to specify `_array_ids_unique` for Token.id as uniqueness
-# is a proper subset of contiguity
-_registry_validation_hooks[Token.__name__].append(
-    functools.partial(_array_ids_contiguous, field="id")
-)
-
-
-def validate_structs_in_registry(
-    struct_type_name: str,
-    registry: Registry,
-):
-    for validation_func in _registry_validation_hooks[struct_type_name]:
-        validation_func(
-            struct_type_name=struct_type_name,
-            registry=registry,
-        )
-
-
-"""
-## Struct construction hooks
-
-Struct construction hooks define logic for defining or transforming
-the data for a given field for a struct.
-Each hook takes as parameters a registry and a set of kwargs containing
-existing field data for the struct being constructed.
-"""
-
-
-def _get_available_consecutive_key(
-    struct_type_name: str,
-    registry: Registry,
-    **_,
-) -> int:
-    return len(get_structs(struct_type_name, registry))
-
-
-def _get_available_nonconsecutive_key(
-    struct_type_name: str,
-    registry: Registry,
-    **_,
-) -> int:
-    return (
-        max(
-            (struct.id for struct in get_structs(struct_type_name, registry)),
-            default=-1,
-        )
-        + 1
-    )
-
-
-_field_hooks: KeyedStructHookType = defaultdict(dict)
-_field_hooks[Token.__name__]["id"] = _get_available_consecutive_key
-_field_hooks[Text.__name__]["id"] = _get_available_nonconsecutive_key
-
-
-def _rename_field(
-    old_field: str,
-    new_field: str,
-    **kwargs,
-) -> dict:
-    if old_field in kwargs:
-        if new_field in kwargs:
-            raise ValueError(
-                f"Expected one of {old_field}, {new_field} in kwargs, got both."
+def _patterns_compile(registry: Registry) -> list[Violation]:
+    violations = []
+    for pattern in get_structs(Pattern.__name__, registry):
+        try:
+            fsa(pattern.value, registry)
+        except Exception as error:
+            violations.append(
+                Violation(
+                    table="symbols",
+                    key=(pattern.name,),
+                    column="value",
+                    kind="custom",
+                    note=f"pattern {pattern.value!r} does not compile: {error}",
+                )
             )
-        kwargs[new_field] = kwargs.pop(old_field)
-    return kwargs
+    return violations
 
 
-def _parse_members(
-    foreign_type_name: str,
-    foreign_string_field: str,
-    foreign_id_field: str,
-    **kwargs,
-) -> dict:
-    if string_list := kwargs.get("string_list", None):
-        pass
-    if id_list := kwargs.get("id_list", None):
-        pass
-
-
-_construction_hooks: StructHookType = defaultdict(list)
-_construction_hooks[MappingNorm.__name__].append(
-    functools.partial(_rename_field, old_field="mapping", new_field="data")
-)
-
-
-def construct_fields(struct_type_name: str, registry: Registry, **kwargs) -> dict:
-    for func in _construction_hooks[struct_type_name]:
-        kwargs = func(**kwargs)
-    for field, func in _field_hooks[struct_type_name].items():
-        value = func(
-            struct_type_name=struct_type_name,
-            registry=registry,
-            **kwargs,
+def _prebuilt_norms_exist(registry: Registry) -> list[Violation]:
+    return [
+        Violation(
+            table="norm_steps",
+            key=(norm.name,),
+            column="name",
+            kind="custom",
+            note="no prebuilt function with this name",
         )
-        kwargs[field] = value
-    return kwargs
+        for norm in get_structs(PrebuiltNorm.__name__, registry)
+        if norm.name not in PREBUILT_NORM_FUNCS
+    ]
+
+
+CUSTOM_CHECKS: list[Callable[[Registry], list[Violation]]] = [
+    _patterns_compile,
+    _prebuilt_norms_exist,
+]
+
+
+def check(registry: Registry) -> list[Violation]:
+    violations = check_registry(registry, TABLES)
+    if violations:
+        return violations
+    return [
+        violation for custom_check in CUSTOM_CHECKS for violation in custom_check(registry)
+    ]
+
+
+def _commit(registry: Registry) -> Registry:
+    if violations := check(registry):
+        raise RegistryCheckError(violations)
+    return registry
+
+
+"""
+## Building and changing structs
+"""
+
+
+def next_id(registry: Registry, table_name: str) -> int:
+    """An unused integer id for a table keyed on `id` (e.g. texts)."""
+    return max((row.id for row in registry[table_name]), default=-1) + 1
 
 
 def build_struct(
@@ -252,169 +115,48 @@ def build_struct(
     registry: Registry,
     **kwargs,
 ) -> tuple[object, Registry]:
-    kwargs = construct_fields(struct_type_name, registry, **kwargs)
-    struct_type = NAME_TO_STRUCT[struct_type_name]
-    struct = structure(kwargs, struct_type)
-    validate_struct(struct, registry)
-    registry = register_struct(struct, registry)
-    return struct, registry
-
-
-"""
-## Struct mutation hooks
-
-Hooks for updating a given field on a struct.
-Each field may define multiple types of mutations, hence the
-use of the `NamedStructHook` type.
-"""
-
-
-def _add_item_to_array(
-    struct: object,
-    field: str,
-    data: object,
-) -> object:
     """
-    Mutate struct by appending an item to the tuple
-    at the specified field.
+    Structure `kwargs` into a struct of the given type and insert it.
+    Returns the struct and the new registry.
     """
-    existing_array = getattr(struct, field)
-    new_array = existing_array + (data,)
-    return new_array
+    struct_type = row_type_for(struct_type_name)
+    if struct_type is Text and "id" not in kwargs:
+        kwargs["id"] = next_id(registry, "texts")
+    struct = CONVERTER.structure(kwargs, struct_type)
+    return struct, insert_struct(struct, registry)
 
 
-def _pop_item_from_array(
-    struct: object,
-    field: str,
-    data: object,
-) -> object:
-    """
-    Mutate struct by removing item from the tuple
-    at the specified field.
-    """
-    existing_array = getattr(struct, field)
-    new_array = tuple(curr_item for curr_item in existing_array if curr_item != data)
-    return new_array
-
-
-# You'd better be ready for how default this dictionary is
-_struct_mutation_hooks: MutationStructHookType = defaultdict(lambda: defaultdict(dict))
-
-_struct_mutation_hooks[TokenGroup.__name__]["members"] = {
-    "append": _add_item_to_array,
-    "pop": _pop_item_from_array,
-}
-_struct_mutation_hooks[NormalizationSpec.__name__]["steps"] = {
-    "append": _add_item_to_array,
-    "pop": _pop_item_from_array,
-}
-_struct_mutation_hooks[NormalizationSpec.__name__]["licit_patterns"] = {
-    "append": _add_item_to_array,
-    "pop": _pop_item_from_array,
-}
-
-
-def mutate_struct(
-    struct: object,
-    field: str,
-    data: object,
-    mutation_type: MutationType,
-) -> object:
-    """
-    Mutate a given field value for a struct and return the
-    updated struct.
-
-    If mutation_type is "update", simply replace the current
-    field data with the passed `data`. Otherwise, call a registered
-    hook for the mutation operation.
-    """
-
-    if mutation_type == "update":
-        value = data
-    else:
-        func = _struct_mutation_hooks[type(struct).__name__][field][mutation_type]
-        value = func(
-            struct=struct,
-            field=field,
-            data=data,
-        )
-
-    return evolve(struct, **{field: value})
-
-
-"""
-## Registry mutation helpers
-
-Inserts, updates or removes a struct from the registry
-and performs any necessary validation.
-"""
-
-
-def _reindex_tokens(
-    struct_type_name: str,
-    field: str,
-    registry: Registry,
-    **_,
-) -> Registry:
-    struct_array = get_structs(struct_type_name, registry)
-    reindexed = tuple(
-        evolve(struct, **{field: i}) for i, struct in enumerate(struct_array)
-    )
-    new_registry = frozendict(**registry | {struct_type_name: reindexed})
-    return new_registry
-
-
-def _check_depending_structs(
-    struct: object,
-    struct_type_name: str,
-    foreign_type_name: str,
-    id_field: str,
-    foreign_field: str,
-    registry: Registry,
-):
-    current_id = getattr(struct, id_field)
-    foreign_structs = get_structs(
-        struct_type_name=foreign_type_name,
-        registry=registry,
-    )
-    does_depend = lambda foreign: current_id in getattr(foreign, foreign_field)
-    depends = tuple(filter(does_depend, foreign_structs))
-    if depends:
-        raise StructDependencyError(
-            f"{depends} depend on existing struct {struct}, cannot remove."
-        )
-
-
-_pre_remove_hooks: StructHookType = defaultdict(list)
-_pre_remove_hooks[Token.__name__].append(1)
-
-_post_remove_hooks: StructHookType = defaultdict(list)
-_post_remove_hooks[Token.__name__].append(
-    functools.partial(
-        _reindex_tokens,
-        field="id",
-    )
-)
-
-
-def register_struct(
+def insert_struct(
     struct: object,
     registry: Registry,
 ) -> Registry:
-    """
-    Append `struct` to the appropriate list in the registry
-    and runs any registry-level validation.
-    Assumes `struct` has already been validated by another
-    function, e.g. `build_struct`.
+    """Append `struct` to its table."""
+    table_name = table_for(type(struct).__name__).name
+    return _commit(frozendict(registry | {table_name: registry[table_name] + (struct,)}))
 
-    Returns the mutated registry.
+
+def _owned_rows(
+    struct: object,
+    registry: Registry,
+) -> list[object]:
     """
-    struct_type_name = resolve_struct_type_name(type(struct).__name__)
-    curr_struct_array = get_structs(struct_type_name, registry)
-    new_struct_array = curr_struct_array + (struct,)
-    new_registry = frozendict(registry | {struct_type_name: new_struct_array})
-    validate_structs_in_registry(struct_type_name, new_registry)
-    return new_registry
+    Rows that reference `struct` through a `ref(..., on_delete="cascade")`,
+    and the rows they own in turn.
+    """
+    parent_table = table_for(type(struct).__name__).name
+    owned = []
+    for table in TABLES:
+        for column, ref_ in table.refs().items():
+            if ref_.table != parent_table or ref_.on_delete != "cascade":
+                continue
+            if ref_.kind is not None and getattr(struct, "kind", None) != ref_.kind:
+                continue
+            parent_value = getattr(struct, ref_.column)
+            for child in registry[table.name]:
+                if getattr(child, column, None) == parent_value:
+                    owned.append(child)
+                    owned.extend(_owned_rows(child, registry))
+    return owned
 
 
 def remove_struct(
@@ -422,44 +164,141 @@ def remove_struct(
     registry: Registry,
 ) -> Registry:
     """
-    Remove `struct` from the appropriate list in the registry,
-    applies any struct removal hooks if any, and runs any
-    registry-level validation.
-
-    Returns the mutated registry.
+    Remove `struct` and the rows it owns (cascade). Fails if any remaining
+    row still references it (restrict).
     """
-    struct_type_name = resolve_struct_type_name(type(struct).__name__)
-    struct_array = get_structs(struct_type_name, registry)
-    filtered_struct_array = tuple(
-        curr_struct for curr_struct in struct_array if struct != curr_struct
-    )
-    new_registry = frozendict(**registry | {struct_type_name: filtered_struct_array})
-    for func in _post_remove_hooks[struct_type_name]:
-        new_registry = func(
-            struct=struct,
-            struct_type_name=struct_type_name,
-            registry=new_registry,
-        )
-    validate_structs_in_registry(struct_type_name, new_registry)
-    return new_registry
+    tables = dict(registry)
+    for row in [struct, *_owned_rows(struct, registry)]:
+        table_name = table_for(type(row).__name__).name
+        tables[table_name] = tuple(r for r in tables[table_name] if r != row)
+    return _commit(frozendict(tables))
 
 
-def update_struct(
+def replace_struct(
     old_struct: object,
     new_struct: object,
     registry: Registry,
 ) -> Registry:
+    """
+    Replace `old_struct` with `new_struct` in place, keeping its position
+    and its owned rows. The key may not change: use `rename_struct`.
+    """
     if type(old_struct) is not type(new_struct):
         raise ValueError("Cannot update struct with struct of different type!")
-    registry = remove_struct(
-        struct=old_struct,
-        registry=registry,
+    table = table_for(type(old_struct).__name__)
+    if table.key_of(old_struct) != table.key_of(new_struct):
+        raise KeyChangeError(
+            f"Cannot change the key of {old_struct} with replace; use rename."
+        )
+    rows = registry[table.name]
+    if old_struct not in rows:
+        raise StructNotFoundError(f"{old_struct} is not in the registry")
+    index = rows.index(old_struct)
+    new_rows = rows[:index] + (new_struct,) + rows[index + 1 :]
+    return _commit(frozendict(registry | {table.name: new_rows}))
+
+
+"""
+## Renaming
+
+Only tables with a single-column key that some `ref` points at can be
+renamed: currently symbols, norm_steps and specs.
+"""
+
+RENAMEABLE_TABLES = frozenset(
+    table.name
+    for table in TABLES
+    if len(table.key) == 1
+    and any(
+        ref_.table == table.name and ref_.column == table.key[0]
+        for other in TABLES
+        for ref_ in other.refs().values()
     )
-    registry = register_struct(
-        struct=new_struct,
-        registry=registry,
+)
+
+
+def _is_symbol(token: object) -> bool:
+    return isinstance(token, (Token, TokenGroup, Pattern))
+
+
+def _signature(tokens) -> tuple[tuple[str, str], ...]:
+    """How a pattern string tokenizes, ignoring the empty splits."""
+    return tuple(
+        (type(token).__name__, surface(token)) for token in tokens if surface(token)
     )
-    return registry
+
+
+def rename_struct(
+    struct_type_name: str,
+    old_name: str,
+    new_name: str,
+    registry: Registry,
+) -> Registry:
+    """
+    Change a row's key from `old_name` to `new_name`, updating every column
+    that references it. When renaming a symbol, pattern strings mentioning it
+    are rewritten too, and the rename is refused if it would change how any
+    pattern tokenizes (longest match can make a new name swallow
+    neighbouring text).
+    """
+    table = table_for(struct_type_name)
+    if table.name not in RENAMEABLE_TABLES:
+        raise RenameError(f"{struct_type_name} cannot be renamed")
+    (key_column,) = table.key
+    row = fetch_struct(struct_type_name, key_column, old_name, registry)
+
+    tables = {name: list(rows) for name, rows in registry.items()}
+    target_rows = tables[table.name]
+    target_rows[target_rows.index(row)] = evolve(row, **{key_column: new_name})
+
+    for other in TABLES:
+        for column, ref_ in other.refs().items():
+            if ref_.table == table.name and ref_.column == key_column:
+                tables[other.name] = [
+                    evolve(r, **{column: new_name})
+                    if getattr(r, column, None) == old_name
+                    else r
+                    for r in tables[other.name]
+                ]
+
+    # index in `symbols` -> expected tokenization after the rename
+    expected_signatures: dict[int, tuple] = {}
+    if table.name == "symbols":
+        symbols = tables["symbols"]
+        for index, symbol in enumerate(symbols):
+            if not isinstance(symbol, Pattern):
+                continue
+            original = registry["symbols"][index]
+            tokens = tokenize_str(original.value, registry)
+            if "".join(surface(token) for token in tokens) != original.value:
+                raise RenameError(
+                    f"Cannot rewrite pattern {original.name}: its value does not "
+                    "round-trip through the tokenizer."
+                )
+            rewritten = [
+                new_name if _is_symbol(token) and token.name == old_name else surface(token)
+                for token in tokens
+            ]
+            expected_signatures[index] = tuple(
+                (kind, new_name if kind != "AnonToken" and text == old_name else text)
+                for kind, text in _signature(tokens)
+            )
+            symbols[index] = evolve(symbol, value="".join(rewritten))
+
+    new_registry = frozendict({name: tuple(rows) for name, rows in tables.items()})
+
+    shifted = [
+        new_registry["symbols"][index].name
+        for index, expected in expected_signatures.items()
+        if _signature(tokenize_str(new_registry["symbols"][index].value, new_registry))
+        != expected
+    ]
+    if shifted:
+        raise RenameError(
+            f"Renaming {old_name!r} to {new_name!r} would change how these "
+            f"patterns tokenize: {', '.join(shifted)}"
+        )
+    return _commit(new_registry)
 
 
 """
@@ -475,8 +314,8 @@ def fetch_struct(
 ) -> object:
     """
     Fetch a struct whose field matches the specified value (e.g.
-    an id or other unique identifier). Raises a ValueError if multiple
-    such structrs are found.
+    an id or other unique identifier). Raises a DuplicateStructError if
+    multiple such structs are found.
     """
     filtered = filter_structs(struct_type_name, field, value, registry)
     if len(filtered) > 1:
@@ -503,32 +342,97 @@ def filter_structs(
 
 
 """
+## Nested views
+
+Child rows (group members, mapping pairs, spec steps and patterns) are
+stored flat. These helpers are the only place the nested shape exists.
+"""
+
+
+def _ordered_children(
+    table_name: str,
+    parent_field: str,
+    parent_value: str,
+    registry: Registry,
+) -> list[object]:
+    table = TABLE_BY_NAME[table_name]
+    rows = [row for row in registry[table_name] if getattr(row, parent_field) == parent_value]
+    if table.position:
+        rows.sort(key=lambda row: getattr(row, table.position))
+    return rows
+
+
+def group_members(registry: Registry, group: str) -> tuple[str, ...]:
+    """Token names in a group, in order."""
+    return tuple(
+        row.token for row in _ordered_children("group_members", "group", group, registry)
+    )
+
+
+def mapping(registry: Registry, norm: str) -> dict[str, str]:
+    """The intab -> outtab pairs of a mapping norm."""
+    return {
+        row.intab: row.outtab
+        for row in _ordered_children("mapping_rows", "norm", norm, registry)
+    }
+
+
+def spec_steps(registry: Registry, spec: str) -> tuple[str, ...]:
+    """Norm step names of a spec, in order."""
+    return tuple(
+        row.step for row in _ordered_children("spec_steps", "spec", spec, registry)
+    )
+
+
+def spec_patterns(registry: Registry, spec: str) -> tuple[str, ...]:
+    """Licit pattern names of a spec."""
+    return tuple(
+        row.pattern for row in _ordered_children("spec_patterns", "spec", spec, registry)
+    )
+
+
+def next_position(
+    registry: Registry,
+    table_name: str,
+    parent_field: str,
+    parent_value: str,
+) -> int:
+    """Position for a row appended after a parent's existing children."""
+    table = TABLE_BY_NAME[table_name]
+    return (
+        max(
+            (
+                getattr(row, table.position)
+                for row in registry[table_name]
+                if getattr(row, parent_field) == parent_value
+            ),
+            default=-1,
+        )
+        + 1
+    )
+
+
+"""
 ## Registry helpers
 """
 
 
 def init_registry() -> Registry:
-    registry = dict.fromkeys(
-        set(NAME_TO_STRUCT.keys()) - set(TYPE_TO_UNION.keys()),
-        (),
-    )
-    prebuilt = tuple(PREBUILT_NORMS.values())
-    registry[NormStep.__name__] = prebuilt
-    registry = frozendict(registry)
-    return registry
+    registry = dict.fromkeys(TABLE_BY_NAME, ())
+    registry["norm_steps"] = tuple(PREBUILT_NORMS.values())
+    return frozendict(registry)
 
 
 def get_structs(
     struct_type_name: str,
     registry: Registry,
 ) -> tuple[object, ...]:
-    if union_type := TYPE_TO_UNION.get(struct_type_name, None):
-        union_struct_array = registry[union_type]
-        filtered = tuple(
-            filter(
-                (lambda struct: type(struct).__name__ == struct_type_name),
-                union_struct_array,
-            )
-        )
-        return filtered
-    return registry[struct_type_name]
+    """
+    Rows for a table name or union alias name, or the rows of one class
+    for a row class name (e.g. only the Tokens in `symbols`).
+    """
+    table = table_for(struct_type_name)
+    rows = registry[table.name]
+    if struct_type_name in (table.name, table.type_name):
+        return rows
+    return tuple(row for row in rows if type(row).__name__ == struct_type_name)

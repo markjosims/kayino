@@ -115,6 +115,8 @@ _input_string = ArgStrings.STRING.value.format(arg_name="input_str")
 _output_string = ArgStrings.STRING.value.format(arg_name="output_str")
 
 _text = ArgStrings.TEXT.value.format(arg_name="text")
+_path = ArgStrings.TEXT.value.format(arg_name="path")
+_spec_word = ArgStrings.WORD.value.format(arg_name="spec")
 _string_text = ArgStrings.TEXT.value.format(arg_name="string")
 
 _quoted_text = ArgStrings.QUOTED.value.format(arg_name="text")
@@ -129,6 +131,11 @@ _string_list = ArgStrings.STRING_LIST.value.format(arg_name="string_list")
 _index_list = ArgStrings.INDEX_LIST.value.format(arg_name="string_list")
 
 _mapping = ArgStrings.MAPPING.value.format(arg_name="mapping")
+
+_old_word = ArgStrings.WORD.value.format(arg_name="old")
+_new_word = ArgStrings.WORD.value.format(arg_name="new")
+_old_pattern_name = ArgStrings.PATTERN_WORD.value.format(arg_name="old")
+_new_pattern_name = ArgStrings.PATTERN_WORD.value.format(arg_name="new")
 
 """
 ## Argword-specific parsing hooks
@@ -163,7 +170,7 @@ _argstring_parse_hooks: dict[str, Callable] = {
 
 
 _struct_builder_patterns = {
-    Token.__name__: _string_word,
+    Token.__name__: _name_word,
     Pattern.__name__: f"({_pattern_name} \\s+ {_value_string})",
     TokenGroup.__name__: f"({_pattern_name} \\s+ ({_index_list}|{_string_list}))",
     MappingNorm.__name__: rf"{_name_word} \s+ {_mapping} (\s+ {_description})?",
@@ -174,13 +181,23 @@ _struct_builder_patterns = {
 }
 
 _struct_removal_patterns = {
-    Token.__name__: rf"({_string_word}|{_index})",
+    Token.__name__: rf"({_name_word}|{_index})",
     Pattern.__name__: rf"({_pattern_name}|{_index})",
     TokenGroup.__name__: rf"({_pattern_name}|{_index})",
     MappingNorm.__name__: rf"({_name_word}|{_index})",
     CdrewriteNorm.__name__: rf"({_name_word}|{_index})",
     Text.__name__: _index,
     NormalizationSpec.__name__: _name_word,
+}
+
+_struct_rename_patterns = {
+    Token.__name__: rf"({_old_word} \s+ {_new_word})",
+    TokenGroup.__name__: rf"({_old_pattern_name} \s+ {_new_pattern_name})",
+    Pattern.__name__: rf"({_old_pattern_name} \s+ {_new_pattern_name})",
+    NormStep.__name__: rf"({_old_word} \s+ {_new_word})",
+    MappingNorm.__name__: rf"({_old_word} \s+ {_new_word})",
+    CdrewriteNorm.__name__: rf"({_old_word} \s+ {_new_word})",
+    NormalizationSpec.__name__: rf"({_old_word} \s+ {_new_word})",
 }
 
 """
@@ -193,6 +210,11 @@ _simple_command_templates = {
     "read": rf"((?P<verb>read) \s+ {_text})",
     "tokenize": rf"((?P<verb>tokenize|tkz) \s+ ({_quoted_text}|{_index}))",
     "process": rf"((?P<verb>process|pro?c) \s+ ({_quoted_text}|{_index}))",
+    "init": rf"((?P<verb>init) \s+ {_path})",
+    "save": rf"((?P<verb>save) (\s+ {_path})?)",
+    "load": rf"((?P<verb>load) \s+ {_path})",
+    "validate": r"((?P<verb>validate))",
+    "export": rf"((?P<verb>export) \s+ {_spec_word} \s+ {_path})",
 }
 
 """
@@ -205,10 +227,12 @@ _struct_command_templates = {
     "add": r"((?P<verb>add|a) \s+ (?P<struct>{struct}) \s+ {struct_args})",
     "remove": r"((?P<verb>remove|rm) \s+ (?P<struct>{struct}) \s+ {struct_args})",
     "list": r"((?P<verb>l(ist)?) \s+ (?P<struct>{struct}))",
+    "rename": r"((?P<verb>rename|mv) \s+ (?P<struct>{struct}) \s+ {struct_args})",
 }
 _struct_command_patterns = {
     "add": _struct_builder_patterns,
     "remove": _struct_removal_patterns,
+    "rename": _struct_rename_patterns,
 }
 
 """
@@ -277,6 +301,7 @@ _shorthand_to_command_name = {
     "prc": "process",
     "proc": "process",
     "rm": "remove",
+    "mv": "rename",
     "l": "list",
     "a": "add",
     "act": "activate",

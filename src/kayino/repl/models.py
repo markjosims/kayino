@@ -1,4 +1,4 @@
-from collections import defaultdict
+from pathlib import Path
 
 from attrs import Factory, frozen
 
@@ -11,6 +11,8 @@ class ReplState:
     registry: Registry = Factory(init_registry)
     texts: dict[str, str] = Factory(dict)
     active_spec: str | None = None
+    # Project folder this session was loaded from / last saved to
+    project_dir: Path | None = None
 
 
 class NoActiveSpecError(KayinoError):
