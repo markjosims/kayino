@@ -28,7 +28,9 @@ def repl():
 
     lexer = GrammarLexer(
         grammar,
-        lexers={key: SimpleLexer(f"class:{key}") for key in INPUT_STYLES.keys()},
+        lexers={
+            member.name: SimpleLexer(f"class:{member.name}") for member in INPUT_STYLES
+        },
     )
 
     completer = GrammarCompleter(
@@ -37,7 +39,9 @@ def repl():
             "verb": WordCompleter(["add"]),
         },
     )
-    input_style = Style.from_dict(INPUT_STYLES)
+    input_style = Style.from_dict(
+        {member.name: member.value for member in INPUT_STYLES}
+    )
 
     while True:
         try:

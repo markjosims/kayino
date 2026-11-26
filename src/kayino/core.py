@@ -71,14 +71,61 @@ def apply_cdrewrite(
 
 def test_fits_patterns(
     text: str,
-    patterns: Mapping[str, str],
+    patterns: tuple[str, ...] | str,
+    registry: Registry,
 ) -> tuple[str, ...] | None:
-    # TODO: use pynini fsas instead of regexes
+
+    if type(patterns) is str:
+        patterns = (patterns,)
+
+    try:
+        text_fsa = fsa(text=text, registry=registry)
+    except Exception as e:
+        raise FsaCompilationError(f"Failed to compile text {text}") from e
+
     valid_patterns = []
-    for key, pattern in patterns.items():
-        if re.fullmatch(pattern, text):
-            valid_patterns.append(key)
-    return tuple(valid_patterns) or None
+    for pattern_name in patterns:
+        pattern = fetch_struct(
+            struct_type_name=Pattern.__name__,
+            field="string",
+            value=pattern_name,
+            registry=registry,
+        )
+        pattern_fsa = fsa(text=pattern.value, registry=registry)
+        intersection = filter_strings_by_pattern(
+            input_fsa=text_fsa,
+            pattern_fsa=pattern_fsa,
+            registry=registry,
+        )
+        if intersection:
+            valid_patterns.append(pattern_name)
+
+    return tuple(valid_patterns)
+
+
+def intersect_pattern(
+    text: str,
+    pattern_name: str,
+    registry: Registry,
+) -> tuple[str, ...]:
+    try:
+        text_fsa = fsa(text=text, registry=registry)
+    except Exception as e:
+        raise FsaCompilationError(f"Failed to compile text {text}") from e
+
+    pattern = fetch_struct(
+        struct_type_name=Pattern.__name__,
+        field="string",
+        value=pattern_name,
+        registry=registry,
+    )
+    pattern_fsa = fsa(text=pattern.value, registry=registry)
+    intersection = filter_strings_by_pattern(
+        input_fsa=text_fsa,
+        pattern_fsa=pattern_fsa,
+        registry=registry,
+    )
+    return tuple(intersection)
 
 
 def apply_step(
@@ -130,30 +177,14 @@ def normalize(
     )
     oov_tokens = tuple(token.string for token in tokens if token.kind == "unrecognized")
     if oov_tokens:
-        breakpoint()
         status = "illicit_token"
         status_payload = oov_tokens
         return result, status, status_payload
-    valid_patterns = []
-    try:
-        result_fsa = fsa(text=result, registry=registry)
-    except Exception as e:
-        raise FsaCompilationError(f"Failed to compile text {text}") from e
-    for pattern_name in spec.licit_patterns:
-        pattern = fetch_struct(
-            struct_type_name=Pattern.__name__,
-            field="string",
-            value=pattern_name,
-            registry=registry,
-        )
-        pattern_fsa = fsa(text=pattern.value, registry=registry)
-        intersection = filter_strings_by_pattern(
-            input_fsa=result_fsa,
-            pattern_fsa=pattern_fsa,
-            registry=registry,
-        )
-        if intersection:
-            valid_patterns.append(pattern_name)
+    valid_patterns = test_fits_patterns(
+        text=result,
+        patterns=spec.licit_patterns,
+        registry=registry,
+    )
     if not valid_patterns:
         status = "illicit_pattern"
     else:

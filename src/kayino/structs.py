@@ -285,7 +285,7 @@ def register_struct(
     struct_type_name = resolve_struct_type_name(type(struct).__name__)
     curr_struct_array = get_structs(struct_type_name, registry)
     new_struct_array = curr_struct_array + (struct,)
-    new_registry = frozendict(registry | {struct_type_name: new_struct_array})
+    new_registry = evolve(registry, **{struct_type_name: new_struct_array})
     validate_structs_in_registry(struct_type_name, new_registry)
     return new_registry
 
@@ -360,7 +360,7 @@ def remove_struct(
     filtered_struct_array = tuple(
         curr_struct for curr_struct in struct_array if struct != curr_struct
     )
-    new_registry = frozendict(**registry | {struct_type_name: filtered_struct_array})
+    new_registry = evolve(registry, **{struct_type_name: filtered_struct_array})
     for func in _post_remove_hooks[struct_type_name]:
         new_registry = func(
             struct=struct,
@@ -384,15 +384,15 @@ def update_struct(
         if getattr(old_struct, field) != getattr(new_struct, field):
             raise StructRenameError("Renaming structs not supported.")
 
-    registry = remove_struct(
-        struct=old_struct,
-        registry=registry,
+    struct_type_name = resolve_struct_type_name(type(old_struct).__name__)
+    struct_array = get_structs(struct_type_name, registry)
+    filtered_struct_array = tuple(
+        curr_struct for curr_struct in struct_array if curr_struct != old_struct
     )
-    registry = register_struct(
-        struct=new_struct,
-        registry=registry,
-    )
-    return registry
+    new_struct_array = filtered_struct_array + (old_struct,)
+    new_registry = evolve(registry, **{struct_type_name: new_struct_array})
+
+    return new_registry
 
 
 """
@@ -436,11 +436,8 @@ def filter_structs(
 
 
 def init_registry() -> Registry:
-    registry = dict.fromkeys(
-        set(NAME_TO_STRUCT.keys()) - set(TYPE_TO_UNION.keys()),
-        (),
-    )
+    data = {}
     prebuilt = tuple(PREBUILT_NORMS.values())
-    registry[NormStep.__name__] = prebuilt
-    registry = frozendict(registry)
+    data[NormStep.__name__] = prebuilt
+    registry = Registry(**data)
     return registry

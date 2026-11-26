@@ -2,20 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Literal, TypeAliasType, get_args
+from typing import Literal, TypeAliasType, TypedDict, get_args
 
 from attrs import Factory, fields, frozen
 from frozendict import frozendict
-
-"""
-## RegistryType
-
-All structs for a given Kayino state are stored in a registry,
-which is implemented as a dictionary mapping the name of a struct
-type to an array of structs.
-"""
-
-Registry = frozendict[str, tuple[object, ...]]
 
 """
 ## Struct definitions
@@ -234,6 +224,24 @@ def resolve_struct_type_fields(struct_type_name: str) -> list[str]:
     return sorted(field.name for field in fields(struct_type))
 
 
+"""
+## RegistryType
+
+All structs for a given Kayino state are stored in a registry,
+which is implemented as a dictionary mapping the name of a struct
+type to an array of structs.
+"""
+
+
+@frozen
+class Registry:
+    Pattern: tuple[Pattern, ...] = tuple()
+    Symbol: tuple[Symbol, ...] = tuple()
+    NormStep: tuple[NormStep, ...] = tuple()
+    NormalizationSpec: tuple[NormalizationSpec, ...] = tuple()
+    Text: tuple[Text, ...] = tuple()
+
+
 ID_FIELDS = ("id", "name")
 
 """
@@ -246,7 +254,7 @@ def get_structs(
     registry: Registry,
 ) -> tuple[object, ...]:
     if union_type := TYPE_TO_UNION.get(struct_type_name, None):
-        union_struct_array = registry[union_type]
+        union_struct_array = getattr(registry, union_type)
         filtered = tuple(
             filter(
                 (lambda struct: type(struct).__name__ == struct_type_name),
@@ -254,7 +262,7 @@ def get_structs(
             )
         )
         return filtered
-    return registry[struct_type_name]
+    return getattr(registry, struct_type_name)
 
 
 """
@@ -332,4 +340,12 @@ class StructRenameError(KayinoError):
 
 
 class MappingConflictError(KayinoError):
+    pass
+
+
+class StateSaveError(KayinoError):
+    pass
+
+
+class StateLoadError(KayinoError):
     pass

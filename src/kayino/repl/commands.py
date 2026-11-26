@@ -1,7 +1,11 @@
+import json
+import unicodedata
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal
 
-from attrs import evolve
+from attrs import asdict, evolve
+from cattrs import structure
 from prompt_toolkit.contrib.regular_languages.compiler import _CompiledGrammar
 from prompt_toolkit.formatted_text import ANSI, FormattedText, to_formatted_text
 from rich.console import Console
@@ -17,6 +21,8 @@ from kayino.models import (
     Pattern,
     RegexSymbols,
     Registry,
+    StateLoadError,
+    StateSaveError,
     Text,
     Token,
     get_structs,
@@ -29,9 +35,7 @@ from kayino.structs import (
     build_struct,
     fetch_struct,
     mutate_struct,
-    register_struct,
     remove_struct,
-    struct_type_name,
     update_struct,
 )
 
@@ -75,6 +79,24 @@ def handle_remove(
     return f"Removed {struct_type_name} from registry...", new_state
 
 
+def _rich_table(
+    title: str,
+    cols: Sequence[str],
+    rows: Sequence[Sequence[str]],
+) -> FormattedText:
+    console = Console()
+    with console.capture() as capture:
+        table = Table(title=title)
+        for col in cols:
+            table.add_column(col)
+        for row in rows:
+            table.add_row(*row)
+        console.print(table)
+
+    formatted = to_formatted_text(ANSI(capture.get()))
+    return formatted
+
+
 def handle_list(
     kwargs: dict[str, str],
     state: ReplState,
@@ -82,16 +104,14 @@ def handle_list(
     struct_type_name = kwargs.pop("struct")
     struct_array = get_structs(struct_type_name, state.registry)
     struct_fields = resolve_struct_type_fields(struct_type_name)
-    console = Console()
-    with console.capture() as capture:
-        table = Table(title=struct_type_name)
-        for col in struct_fields:
-            table.add_column(col)
-        for struct in struct_array:
-            table.add_row(*(str(getattr(struct, col, "")) for col in struct_fields))
-        console.print(table)
-
-    formatted = to_formatted_text(ANSI(capture.get()))
+    rows = []
+    for struct in struct_array:
+        rows.append([str(getattr(struct, col, "")) for col in struct_fields])
+    formatted = _rich_table(
+        title=struct_type_name,
+        cols=struct_fields,
+        rows=rows,
+    )
     return formatted, state
 
 
@@ -392,19 +412,158 @@ def handle_oov(
     kwargs: dict[str, str],
     state: ReplState,
 ) -> tuple[FormattedText | str, ReplState]:
+    processed = _process_all_texts(state)
+
+    oov_type: Literal["token", "text"] = kwargs["oov_type"]
+    return_type: Literal["first", "all"] = kwargs.get("return_type", "first")
+
+    if oov_type == "token":
+        if return_type == "all":
+            oov_texts = tuple(
+                token
+                for _, status, payload in processed
+                for token in (payload or [])
+                if status == "illicit_token"
+            )
+            return FormattedText(
+                zip(
+                    oov_texts,
+                    [TOKEN_STYLES.unrecognized.value] * len(oov_texts),
+                )
+            ), state
+        elif return_type == "first":
+            oov_text = next(
+                (
+                    token
+                    for _, status, payload in processed
+                    for token in (payload or [])
+                    if status == "illicit_token"
+                ),
+                # TODO: smarter handling of no OOV cases across all branches
+                "no oov!",
+            )
+            return FormattedText(
+                [
+                    (
+                        TOKEN_STYLES.unrecognized.value,
+                        oov_text,
+                    )
+                ]
+            ), state
+        else:
+            raise ValueError(f"Invalid {return_type}")
+
+    if oov_type == "text":
+        if return_type == "all":
+            oov_texts = tuple(
+                text for text, status, _ in processed if status != "licit"
+            )
+            return FormattedText(
+                zip(
+                    oov_texts,
+                    [TOKEN_STYLES.unrecognized.value] * len(oov_texts),
+                )
+            ), state
+        elif return_type == "first":
+            oov_text = next(text for text, status, _ in processed if status != "licit")
+            return FormattedText(
+                [
+                    (
+                        TOKEN_STYLES.unrecognized.value,
+                        oov_text,
+                    )
+                ]
+            ), state
+        else:
+            raise ValueError(f"Invalid {return_type=}")
+        raise ValueError(f"Invalid {oov_type=}")
+
+
+def _process_all_texts(state: ReplState) -> list:
     spec = get_active_spec(state)
     if spec is None:
         raise NoActiveSpecError
 
-
-def _process_all_texts(state) -> list:
     processed = [
-        normalize(text.string, state.spec, state.registry)
+        normalize(
+            text.string,
+            spec,
+            state.registry,
+        )
         for text in get_structs(
             struct_type_name=Text.__name__,
             registry=state.registry,
         )
     ]
+    return processed
+
+
+def handle_save(
+    kwargs: dict[str, str],
+    state: ReplState,
+) -> tuple[FormattedText | str, ReplState]:
+    path = kwargs["path"]
+    try:
+        Path(path).with_suffix(".json").write_text(
+            json.dumps(
+                asdict(state),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+    except Exception as e:
+        raise StateSaveError(f"{path}: {e}") from e
+
+    return f"Saved to {path}!", state
+
+
+def handle_load(
+    kwargs: dict[str, str],
+    state: ReplState,
+) -> tuple[FormattedText | str, ReplState]:
+    path = kwargs["path"]
+    try:
+        state_data = json.loads(Path(path).with_suffix(".json").read_bytes())
+        state = structure(state_data, ReplState)
+    except Exception as e:
+        raise StateLoadError(f"{path}: {e}") from e
+    return f"Loaded {path}!", state
+
+
+def _unicode_point(char: str) -> str:
+    code_point = ord(char)
+    return f"U+{code_point:04X}"
+
+
+def handle_nonascii(
+    kwargs: dict[str, str],
+    state: ReplState,
+) -> tuple[FormattedText | str, ReplState]:
+    target: Literal["raw", "processed"] = kwargs.get("target", "processed")
+    if target == "processed":
+        processed = _process_all_texts(state)
+        texts = [text for text, _, _ in processed]
+    elif target == "raw":
+        texts = get_structs(
+            struct_type_name=Text.__name__,
+            registry=state.registry,
+        )
+        texts = [text.string for text in texts]
+    else:
+        raise ValueError(f"Invalid {target=}")
+
+    joined = "".join(texts)
+    chars = set(joined)
+    is_nonascii = lambda c: not c.isascii()
+    nonascii = list(filter(is_nonascii, chars))
+    rows = [(char, _unicode_point(char), unicodedata.name(char)) for char in nonascii]
+    cols = ["Character", "Unicode point", "Name"]
+    title = f"{target.upper()} non-ascii characters"
+    return _rich_table(
+        title=title,
+        cols=cols,
+        rows=rows,
+    ), state
 
 
 _verb_to_func = {
@@ -416,6 +575,10 @@ _verb_to_func = {
     "read": handle_read,
     "spec": handle_spec,
     "apply": handle_apply,
+    "oov": handle_oov,
+    "save": handle_save,
+    "load": handle_load,
+    "nonascii": handle_nonascii,
 }
 
 
