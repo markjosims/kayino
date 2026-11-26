@@ -239,7 +239,6 @@ class Registry:
     Symbol: tuple[Symbol, ...] = tuple()
     NormStep: tuple[NormStep, ...] = tuple()
     NormalizationSpec: tuple[NormalizationSpec, ...] = tuple()
-    Text: tuple[Text, ...] = tuple()
 
 
 ID_FIELDS = ("id", "name")

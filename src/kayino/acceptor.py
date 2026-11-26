@@ -190,7 +190,7 @@ def tokenize_str(
     tokenized = []
     split_by_tokens = token_regex.split(text)
     for word in split_by_tokens:
-        if not word:
+        if not word.strip():
             continue
         if word in symbol_map:
             tokenized.append(symbol_map[word])

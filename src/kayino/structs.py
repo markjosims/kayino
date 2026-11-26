@@ -21,6 +21,7 @@ from kayino.models import (
     DuplicateStructError,
     FsaCompilationError,
     MalformedStructArrayError,
+    MappingNorm,
     NormalizationSpec,
     NormStep,
     Pattern,
@@ -215,6 +216,35 @@ def _pop_item_from_array(
     return new_array
 
 
+def _add_pair_to_map(
+    struct: object,
+    field: str,
+    data: object,
+) -> object:
+    """
+    Mutate struct by appending a key:value pair
+    at the specified field.
+    """
+    key, value = data
+    existing_map = getattr(struct, field)
+    new_map = existing_map | {key: value}
+    return new_map
+
+
+def _pop_pair_from_map(
+    struct: object,
+    field: str,
+    data: object,
+) -> object:
+    """
+    Mutate struct by removing a key:value pair
+    at the specified field.
+    """
+    existing_map = getattr(struct, field)
+    new_map = frozendict({k: v for k, v in existing_map.items() if k != data})
+    return new_map
+
+
 # You'd better be ready for how default this dictionary is
 _struct_mutation_hooks: MutationStructHookType = defaultdict(lambda: defaultdict(dict))
 
@@ -225,6 +255,10 @@ _struct_mutation_hooks[NormalizationSpec.__name__]["steps"] = {
 _struct_mutation_hooks[NormalizationSpec.__name__]["licit_patterns"] = {
     "append": _add_item_to_array,
     "pop": _pop_item_from_array,
+}
+_struct_mutation_hooks[MappingNorm.__name__]["data"] = {
+    "append": _add_pair_to_map,
+    "pop": _pop_pair_from_map,
 }
 
 

@@ -15,6 +15,7 @@ from kayino.acceptor import tokenize_str
 from kayino.core import apply_step, normalize
 from kayino.models import (
     KayinoError,
+    MappingNorm,
     NormalizationSpec,
     NormalizationStatus,
     NormStep,
@@ -120,17 +121,12 @@ _token_separator = (TOKEN_STYLES["separator"], ":")
 
 def _retrieve_text(
     kwargs: dict,
-    registry: Registry,
+    state: ReplState,
 ) -> str:
     input_str = kwargs.get("text", None)
     if input_str is None:
-        text_id = kwargs["index"]
-        text = fetch_struct(
-            struct_type_name=Text.__name__,
-            field="id",
-            value=text_id,
-            registry=registry,
-        )
+        i = kwargs["index"]
+        text = state.texts[i]
         input_str = text.string
     return input_str
 
@@ -139,7 +135,7 @@ def handle_tokenize(
     kwargs: dict[str, str],
     state: ReplState,
 ) -> tuple[FormattedText | str, ReplState]:
-    input_str = _retrieve_text(kwargs, state.registry)
+    input_str = _retrieve_text(kwargs, state)
     formatted_tokens = _tokenize_inner(
         input_str,
         state.registry,
@@ -151,7 +147,7 @@ def handle_process(
     kwargs: dict[str, str],
     state: ReplState,
 ) -> tuple[FormattedText | str, ReplState]:
-    input_str = _retrieve_text(kwargs, state.registry)
+    input_str = _retrieve_text(kwargs, state)
     spec = get_active_spec(state)
     if spec is None:
         raise NoActiveSpecError
@@ -197,7 +193,7 @@ def handle_apply(
     kwargs: dict[str, str],
     state: ReplState,
 ) -> tuple[FormattedText | str, ReplState]:
-    input_str = _retrieve_text(kwargs, state.registry)
+    input_str = _retrieve_text(kwargs, state)
     step = fetch_struct(
         struct_type_name=NormStep.__name__,
         field="name",
@@ -223,7 +219,7 @@ def _tokenize_inner(input_str: str, registry: Registry) -> FormattedText:
         if not word.string:
             continue
         if not word.string.strip():
-            format_string_tuples.append((" ", None))
+            format_string_tuples.append(("", ""))
         elif isinstance(word, Token):
             if (
                 format_string_tuples
@@ -256,21 +252,62 @@ def handle_read(
 ) -> tuple[FormattedText | str, ReplState]:
     filepath = kwargs["text"]
     lines = Path(filepath).read_text().splitlines()
-    registry = state.registry
-    for line in lines:
-        _, registry = build_struct(
-            struct_type_name=Text.__name__,
-            registry=registry,
+    texts = [
+        Text(
+            string=line,
             source_type="file",
             source_value=filepath,
-            string=line,
         )
+        for line in lines
+    ]
+    new_text_array = state.texts + texts
     state = evolve(
         state,
-        registry=registry,
+        texts=new_text_array,
     )
 
     return f"Read {len(lines)} texts...", state
+
+
+def handle_map(
+    kwargs: dict[str, str],
+    state: ReplState,
+) -> tuple[FormattedText | str, ReplState]:
+    subverb = kwargs.pop("subverb")
+    name = kwargs.pop("name")
+    map_step = fetch_struct(
+        struct_type_name=MappingNorm.__name__,
+        field="name",
+        value=name,
+        registry=state.registry,
+    )
+    if subverb == "append":
+        pair = (kwargs["intab"], kwargs["outtab"])
+        new_map = mutate_struct(
+            struct=map_step,
+            field="data",
+            data=pair,
+            mutation_type="append",
+        )
+        status = f"Inserted {pair} to map"
+    elif subverb == "append":
+        key = kwargs["intab"]
+        new_map = mutate_struct(
+            struct=map_step,
+            field="data",
+            data=key,
+            mutation_type="append",
+        )
+        status = f"Popped {key} from map"
+    else:
+        raise ValueError
+    registry = put_struct(
+        old_struct=map_step,
+        new_struct=new_map,
+        registry=state.registry,
+    )
+    state = evolve(state, registry=registry)
+    return status, state
 
 
 def handle_spec(
@@ -419,20 +456,14 @@ def handle_oov(
 
     if oov_type == "token":
         if return_type == "all":
-            oov_texts = tuple(
+            oov_tokens = "".join(
                 token
                 for _, status, payload in processed
                 for token in (payload or [])
                 if status == "illicit_token"
             )
-            return FormattedText(
-                zip(
-                    oov_texts,
-                    [TOKEN_STYLES.unrecognized.value] * len(oov_texts),
-                )
-            ), state
         elif return_type == "first":
-            oov_text = next(
+            oov_tokens = next(
                 (
                     token
                     for _, status, payload in processed
@@ -442,16 +473,18 @@ def handle_oov(
                 # TODO: smarter handling of no OOV cases across all branches
                 "no oov!",
             )
-            return FormattedText(
-                [
-                    (
-                        TOKEN_STYLES.unrecognized.value,
-                        oov_text,
-                    )
-                ]
-            ), state
         else:
             raise ValueError(f"Invalid {return_type}")
+        formatted = []
+        oov_tokens = set(oov_tokens)
+        for char in oov_tokens:
+            formatted.append((TOKEN_STYLES.unrecognized, char))
+            formatted.append(("", "\t"))
+            formatted.append(("", _unicode_point(char)))
+            formatted.append(("", "\t"))
+            formatted.append(("", unicodedata.name(char)))
+            formatted.append(("", "\n"))
+        return FormattedText(formatted), state
 
     if oov_type == "text":
         if return_type == "all":
@@ -490,10 +523,7 @@ def _process_all_texts(state: ReplState) -> list:
             spec,
             state.registry,
         )
-        for text in get_structs(
-            struct_type_name=Text.__name__,
-            registry=state.registry,
-        )
+        for text in state.texts
     ]
     return processed
 
@@ -566,6 +596,32 @@ def handle_nonascii(
     ), state
 
 
+def handle_look_unicode(
+    kwargs: dict[str, str],
+    state: ReplState,
+) -> tuple[FormattedText | str, ReplState]:
+    text = _retrieve_text(kwargs, state)
+    target: Literal["raw", "processed"] = kwargs.get("target", "processed")
+    if target == "processed":
+        spec = get_active_spec(state)
+        if spec is None:
+            raise NoActiveSpecError
+        text, _, _ = normalize(
+            text=text,
+            spec=spec,
+            registry=state.registry,
+        )
+
+    rows = [(char, _unicode_point(char), unicodedata.name(char)) for char in text]
+    cols = ["Character", "Unicode point", "Name"]
+    title = f"{target.upper()} character unicode data"
+    return _rich_table(
+        title=title,
+        cols=cols,
+        rows=rows,
+    ), state
+
+
 _verb_to_func = {
     "add": handle_add,
     "list": handle_list,
@@ -579,6 +635,8 @@ _verb_to_func = {
     "save": handle_save,
     "load": handle_load,
     "nonascii": handle_nonascii,
+    "look": handle_look_unicode,
+    "map": handle_map,
 }
 
 

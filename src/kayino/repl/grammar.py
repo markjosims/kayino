@@ -67,7 +67,7 @@ _all_struct_regex = _regex_union(_all_struct_names)
 ## Arg capture groups
 """
 
-_word_or_quoted = r"(\"[^\"]+\"|\w+)"
+_word_or_quoted = r"(\"([^\"]+)\"|(\w+))"
 
 
 class ArgStrings(str, Enum):
@@ -100,14 +100,12 @@ class ArgStrings(str, Enum):
 
 
 # ArgString + arg name combos
-_string_word = ArgStrings.WORD.value.format(arg_name="string")
 _name_word = ArgStrings.WORD.value.format(arg_name="name")
 _kind_word = ArgStrings.WORD.value.format(arg_name="kind")
 
 _pattern_string = ArgStrings.PATTERN_WORD.value.format(arg_name="string")
 
-# you see there are "strings" and then there are "string strings"
-_string_string = ArgStrings.STRING.value.format(arg_name="string")
+_string = ArgStrings.STRING.value.format(arg_name="string")
 _value_string = ArgStrings.STRING.value.format(arg_name="value")
 _input_string = ArgStrings.STRING.value.format(arg_name="input_str")
 _output_string = ArgStrings.STRING.value.format(arg_name="output_str")
@@ -132,7 +130,7 @@ _rwr_args = (
 
 
 _struct_builder_patterns = {
-    Token.__name__: _string_word,
+    Token.__name__: _string,
     Pattern.__name__: rf"{_pattern_string} \s+ {_value_string}",
     MappingNorm.__name__: rf"{_name_word} \s+ {_mapping} (\s+ {_description})?",
     CdrewriteNorm.__name__: rf"{_name_word} \s+ {_rwr_args}",
@@ -141,7 +139,7 @@ _struct_builder_patterns = {
 }
 
 _struct_removal_patterns = {
-    Token.__name__: rf"({_string_word}|{_index})",
+    Token.__name__: rf"({_string}|{_index})",
     Pattern.__name__: rf"({_pattern_string}|{_index})",
     MappingNorm.__name__: rf"({_name_word}|{_index})",
     CdrewriteNorm.__name__: rf"({_name_word}|{_index})",
@@ -170,6 +168,12 @@ def _parse_mapping(text: str) -> dict[str, str]:
         _word_or_quoted + r"\s+>\s+" + _word_or_quoted + ";?",
         text,
     )
+    for i, pair in enumerate(pairs):
+        # TODO: ad-hoc replacing <Empty> -> "" for mapping inputs
+        # need to think about whether this is something that needs
+        # to be handled more systematically
+        if pair[1] == "<Empty>":
+            pairs[i] = (pair[0], "")
     intabs = [pair[0] for pair in pairs]
     intab_counter = Counter(intabs)
     duplicate = [pair for pair in pairs if intab_counter[pair[0]] > 1]
@@ -220,7 +224,9 @@ _simple_command_templates = {
     "oov": rf"((?P<verb>oov) (\s+(?P<oov_type>text|token))? (\s+(?P<return_type>first|all))?)",
     "load": rf"((?P<verb>load) \s+(?P<path>.*))",
     "save": rf"((?P<verb>save) \s+(?P<path>.*))",
-    "nonascii": rf"((?P<verb>nonascii) \s+(?P<target>raw|processed))",
+    "nonascii": rf"((?P<verb>nonascii) \s+ (?P<target>raw|processed))",
+    "look": rf"((?P<verb>look) \s+ (?P<target>raw|processed))"
+    rf"\s+ ({_index}|{_quoted_text}|{_text})",
 }
 
 """
@@ -270,7 +276,7 @@ _activate_spec_template = (
 )
 
 
-def spec_command_str() -> str:
+def _spec_command_str() -> str:
     command_strs = []
     for k, v in _modify_spec_field_patterns.items():
         field_str = _regex_union(_modify_spec_field2shorthand.get(k, []) + [k])
@@ -287,14 +293,36 @@ def spec_command_str() -> str:
 
 
 """
+### MappingNorm commands
+
+Special REPL commands specific to the MappingNorm struct
+"""
+
+_insert_to_map_template = (
+    rf"((?P<verb>map) \s+ {_name_word} \s+ (?P<subverb>app(end)?)"
+    rf"\s+ (?P<intab>{_word_or_quoted}) \s+ (?P<outtab>{_word_or_quoted}))"
+)
+_pop_from_map_template = (
+    rf"((?P<verb>map) \s+ {_name_word} \s+ (?P<subverb>p(op)?)"
+    rf"\s+ (?P<intab>{_word_or_quoted}))"
+)
+_map_command_str = _regex_union(
+    (
+        _insert_to_map_template,
+        _pop_from_map_template,
+    )
+)
+
+
+"""
 ### Special commands
 
 List aggregating all special command strs
-(so far only NormalizationSpec, more to come!)
 """
 
 _special_command_strs = []
-_special_command_strs.append(spec_command_str())
+_special_command_strs.append(_spec_command_str())
+_special_command_strs.append(_map_command_str)
 
 """
 ### Shorthands

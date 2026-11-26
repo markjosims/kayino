@@ -2,14 +2,14 @@ from collections import defaultdict
 
 from attrs import Factory, frozen
 
-from kayino.models import KayinoError, NormalizationSpec, Registry
+from kayino.models import KayinoError, NormalizationSpec, Registry, Text
 from kayino.structs import fetch_struct, init_registry
 
 
 @frozen
 class ReplState:
     registry: Registry = Factory(init_registry)
-    texts: dict[str, str] = Factory(dict)
+    texts: list[Text] = Factory(list)
     active_spec: str | None = None
 
 
