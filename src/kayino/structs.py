@@ -371,7 +371,7 @@ def remove_struct(
     return new_registry
 
 
-def update_struct(
+def put_struct(
     old_struct: object,
     new_struct: object,
     registry: Registry,
@@ -389,7 +389,7 @@ def update_struct(
     filtered_struct_array = tuple(
         curr_struct for curr_struct in struct_array if curr_struct != old_struct
     )
-    new_struct_array = filtered_struct_array + (old_struct,)
+    new_struct_array = filtered_struct_array + (new_struct,)
     new_registry = evolve(registry, **{struct_type_name: new_struct_array})
 
     return new_registry

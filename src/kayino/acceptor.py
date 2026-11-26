@@ -108,6 +108,7 @@ def get_sigma_star(token_array: Sequence[Token]) -> pynini.Fst:
 @lru_cache(maxsize=1)
 def _symbol_regex(registry: Registry) -> re.Pattern:
     user_symbols = [symbol.string for symbol in get_structs(Symbol.__name__, registry)]
+
     regex_symbols = [re.escape(item.value) for item in RegexSymbols]
     return re.compile(
         "("

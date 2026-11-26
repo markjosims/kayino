@@ -1,5 +1,6 @@
 import re
 from collections.abc import Mapping, Sequence
+from functools import lru_cache
 
 import pynini
 from pynini.lib.byte import BYTE
@@ -150,6 +151,7 @@ def apply_step(
     raise ValueError("Unknown normstep type", step.kind)
 
 
+@lru_cache(maxsize=1_024)
 def normalize(
     text: str,
     spec: NormalizationSpec,

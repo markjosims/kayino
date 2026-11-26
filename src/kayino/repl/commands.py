@@ -35,8 +35,8 @@ from kayino.structs import (
     build_struct,
     fetch_struct,
     mutate_struct,
+    put_struct,
     remove_struct,
-    update_struct,
 )
 
 
@@ -341,7 +341,7 @@ def handle_spec_append(
         status_message = "Appended step to spec!"
     else:
         raise ValueError("Invalid field")
-    new_registry = update_struct(
+    new_registry = put_struct(
         old_struct=active_spec,
         new_struct=new_spec,
         registry=state.registry,
@@ -376,7 +376,7 @@ def handle_spec_pop(
         status_message = "Removed normalization step from spec!"
     else:
         raise ValueError("Uknown field")
-    new_registry = update_struct(
+    new_registry = put_struct(
         old_struct=active_spec,
         new_struct=new_spec,
         registry=state.registry,
@@ -508,7 +508,7 @@ def handle_save(
             json.dumps(
                 asdict(state),
                 indent=2,
-                ensure_ascii=False,
+                ensure_ascii=True,
             )
         )
     except Exception as e:
