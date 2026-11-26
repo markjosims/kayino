@@ -6,6 +6,7 @@ import json
 import re
 from pathlib import Path
 
+import attrs
 import pytest
 
 from kayino.repl.grammar import (
@@ -28,11 +29,9 @@ def test_argwords(argword_test):
     arg_key = argword_test["arg_key"]
     user_input = argword_test["user_input"]
     expected_value = argword_test["expected_value"]
-    # cast inner lists to tuples as JSON does not have a tuple type
-    if arg_word == "MAPPING":
-        expected_value = list(map(tuple, expected_value))
+    arg_pattern = ArgStrings[arg_word].format(arg_name=arg_key)
     result = re.match(
-        ArgStrings[arg_word].format(arg_name=arg_key),
+        arg_pattern,
         user_input,
     )
     if expected_value is None:
@@ -41,6 +40,8 @@ def test_argwords(argword_test):
         arg_value = result.groupdict()[arg_key]
         if arg_key in _argstring_parse_hooks:
             arg_value = _argstring_parse_hooks[arg_key](arg_value)
+        if attrs.has(arg_value):
+            arg_value = attrs.asdict(arg_value)
         assert arg_value == expected_value
 
 
@@ -50,12 +51,8 @@ def test_commands(command_test):
     user_input = command_test["user_input"]
     expected_kwargs = command_test["expected_kwargs"]
     parsed = parse_command(user_input, grammar)
-
-    if expected_kwargs is None:
-        assert parsed == expected_kwargs
-        return
-
-    if mapping := expected_kwargs.pop("mapping", None):
-        expected_kwargs["mapping"] = list(map(tuple, mapping))
+    for k, v in parsed.items():
+        if attrs.has(v):
+            parsed[k] = attrs.asdict(v)
 
     assert expected_kwargs == parsed

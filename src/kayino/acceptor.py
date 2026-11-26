@@ -25,8 +25,11 @@ from kayino.models import (
     Pattern,
     RegexSymbols,
     Registry,
+    ReservedSymbols,
+    Symbol,
     Token,
-    TokenGroup,
+    TokenLike,
+    get_structs,
 )
 
 """
@@ -39,15 +42,6 @@ def sequence_as_tuple(f: Callable):
     def g(seq):
         t = tuple(seq)
         return f(t)
-
-    return g
-
-
-def registry_as_frozendict(f: Callable):
-    @wraps(f)
-    def g(reg):
-        frozen = frozendict({k: tuple(v) for k, v in reg.items()})
-        return f(frozen)
 
     return g
 
@@ -78,13 +72,14 @@ def symbol_table_for_tokens(
 @sequence_as_tuple
 @lru_cache(maxsize=1)
 def _symbol_table_for_tokens_inner(
-    token_array: Sequence[Token] | None = None,
+    token_array: tuple[Token, ...] | None = None,
 ) -> pynini.SymbolTable:
 
     sym_table = pynini.SymbolTable()
+    sym_table.add_symbol(ReservedSymbols.EPSILON.value, key=0)
     if token_array:
         for token in token_array:
-            sym_table.add_symbol(token.string, key=token.id)
+            sym_table.add_symbol(token.string)
     return sym_table
 
 
@@ -110,36 +105,49 @@ def get_sigma_star(token_array: Sequence[Token]) -> pynini.Fst:
 """
 
 
-@registry_as_frozendict
 @lru_cache(maxsize=1)
-def _token_regex(registry: Registry) -> re.Pattern:
-    token_symbols = [
-        token.string
-        for token in registry.get(
-            Token.__name__,
-            tuple(),
-        )
-    ]
-    group_symbols = [
-        group.string
-        for group in registry.get(
-            TokenGroup.__name__,
-            tuple(),
-        )
-    ]
-    pattern_symbols = [
-        pattern.string
-        for pattern in registry.get(
-            Pattern.__name__,
-            tuple(),
-        )
-    ]
+def _symbol_regex(registry: Registry) -> re.Pattern:
+    user_symbols = [symbol.string for symbol in get_structs(Symbol.__name__, registry)]
     regex_symbols = [re.escape(item.value) for item in RegexSymbols]
     return re.compile(
         "("
         + "|".join(
             sorted(
-                token_symbols + group_symbols + pattern_symbols + regex_symbols,
+                user_symbols + regex_symbols,
+                key=len,
+                reverse=True,
+            )
+        )
+        + ")",
+    )
+
+
+@lru_cache(maxsize=1)
+def _pattern_regex(registry: Registry) -> re.Pattern:
+    pattern_symbols = [
+        symbol.string for symbol in get_structs(Pattern.__name__, registry)
+    ]
+    return re.compile(
+        "("
+        + "|".join(
+            sorted(
+                pattern_symbols,
+                key=len,
+                reverse=True,
+            )
+        )
+        + ")",
+    )
+
+
+@lru_cache(maxsize=1)
+def _regex_regex(registry: Registry) -> re.Pattern:
+    regex_symbols = [re.escape(item.value) for item in RegexSymbols]
+    return re.compile(
+        "("
+        + "|".join(
+            sorted(
+                regex_symbols,
                 key=len,
                 reverse=True,
             )
@@ -150,36 +158,41 @@ def _token_regex(registry: Registry) -> re.Pattern:
 
 @sequence_as_tuple
 @lru_cache(maxsize=1)
-def get_token_string_map(token_array: Sequence[Token]) -> dict[str, Token]:
-    return {token.string: token for token in token_array}
-
-
-@sequence_as_tuple
-@lru_cache(maxsize=1)
-def get_token_id_map(token_array: Sequence[Token]) -> dict[int, Token]:
-    return {token.id: token for token in token_array}
-
-
-@sequence_as_tuple
-@lru_cache(maxsize=1)
-def get_token_group_map(token_groups: Sequence[TokenGroup]) -> dict[int, Token]:
-    return {group.string: group for group in token_groups}
+def get_symbol_map(symbol_array: Sequence[Symbol]) -> dict[str, Symbol]:
+    return {symbol.string: symbol for symbol in symbol_array}
 
 
 def tokenize_str(
-    pattern_str: str,
+    text: str,
     registry: Registry,
-) -> tuple[Token | AnonToken]:
-    token_regex = _token_regex(registry)
-    token_map = get_token_string_map(registry[Token.__name__])
-    group_map = get_token_group_map(registry[TokenGroup.__name__])
+    no_patterns_or_regex: bool = False,
+) -> tuple[TokenLike, ...]:
+    if no_patterns_or_regex:
+        patterns = _pattern_regex(registry)
+        if pattern_hits := list(filter(None, patterns.findall(text))):
+            raise ValueError(
+                f"Expected only plain tokens but got patterns: {pattern_hits}"
+            )
+        regex_operators = _regex_regex(registry)
+        if regex_hits := regex_operators.findall(text):
+            raise ValueError(
+                f"Expected only plain tokens but got regex operatorrs: {regex_hits}"
+            )
+
+    token_regex = _symbol_regex(registry)
+    symbol_map = get_symbol_map(
+        get_structs(
+            struct_type_name=Symbol.__name__,
+            registry=registry,
+        )
+    )
     tokenized = []
-    split_by_tokens = token_regex.split(pattern_str)
+    split_by_tokens = token_regex.split(text)
     for word in split_by_tokens:
-        if word in token_map:
-            tokenized.append(token_map[word])
-        elif word in group_map:
-            tokenized.append(group_map[word])
+        if not word:
+            continue
+        if word in symbol_map:
+            tokenized.append(symbol_map[word])
         elif word in RegexSymbols:
             tokenized.append(AnonToken(string=word, kind="operator"))
         else:
@@ -204,16 +217,16 @@ def _interpret_unary_operator(fst: pynini.Fst, op: str) -> pynini.Fst:
 
 
 def _atom_to_fst(
-    token: Token | TokenGroup | AnonToken,
+    token: Token | AnonToken,
     registry: Registry,
 ) -> pynini.Fst:
-    sym_table = symbol_table_for_tokens(registry[Token.__name__])
+    sym_table = symbol_table_for_tokens(
+        get_structs(
+            struct_type_name=Token.__name__,
+            registry=registry,
+        )
+    )
     return pynini.accep(token.string, token_type=sym_table)
-
-
-@lru_cache(maxsize=256)
-def _group_or_pattern_to_fst(token: TokenGroup) -> pynini.Fst:
-    pass
 
 
 def _parse_factor_sequence(
@@ -257,7 +270,15 @@ def _parse_delimited_factor(
         )
         inner = pynini.union(*factors)
         if negated:
-            inner = pynini.difference(get_sigma(registry[Token.__name__]), inner)
+            inner = pynini.difference(
+                get_sigma(
+                    get_structs(
+                        struct_type_name=Token.__name__,
+                        registry=registry,
+                    )
+                ),
+                inner,
+            )
         expected = "}"
     elif left == "(":
         inner, i = _parse_expression(
@@ -339,7 +360,12 @@ def _parse_pattern(
     pattern_str: str,
     registry: Registry,
 ) -> pynini.Fst:
-    sym_table = symbol_table_for_tokens(registry[Token.__name__])
+    sym_table = symbol_table_for_tokens(
+        get_structs(
+            struct_type_name=Token.__name__,
+            registry=registry,
+        )
+    )
     if not pattern_str:
         return pynini.accep("", token_type=sym_table)
     toks = tokenize_str(pattern_str, registry)
@@ -353,9 +379,9 @@ def _parse_pattern(
 """
 
 
-def fsa(pattern_str: str, registry: Registry) -> pynini.Fst:
+def fsa(text: str, registry: Registry) -> pynini.Fst:
     return _parse_pattern(
-        pattern_str,
+        text,
         registry,
     )
 
@@ -369,7 +395,12 @@ def decode_labels(
     label_iter,
     registry: Registry,
 ) -> str:
-    sym_table = symbol_table_for_tokens(registry[Token.__name__])
+    sym_table = symbol_table_for_tokens(
+        get_structs(
+            struct_type_name=Token.__name__,
+            registry=registry,
+        )
+    )
     word = ""
     for label in label_iter:
         if label == 0:
@@ -384,8 +415,6 @@ def fsm_strings_and_weights(
     registry: Registry,
     project: Literal["input", "output"] = "output",
     nshortest: int | None = MAX_OUTPUT_STRINGS,
-    strip_word_edge_symbols: bool = False,
-    strip_all_tags: bool = False,
 ) -> list[tuple[str, float]]:
     projected = pynini.project(fst, project_type=project)
     if nshortest is not None:
@@ -397,8 +426,6 @@ def fsm_strings_and_weights(
         word = decode_labels(
             path_iter.olabels(),
             registry,
-            strip_word_edge_symbols=strip_word_edge_symbols,
-            strip_all_tags=strip_all_tags,
         )
         if word not in seen:
             seen.add(word)
@@ -413,8 +440,6 @@ def fsm_strings(
     registry: Registry,
     project: Literal["input", "output"] = "output",
     nshortest: int | None = MAX_OUTPUT_STRINGS,
-    strip_word_edge_symbols: bool = False,
-    strip_all_tags: bool = False,
 ) -> list[str]:
     return [
         s
@@ -423,8 +448,6 @@ def fsm_strings(
             registry,
             project,
             nshortest,
-            strip_word_edge_symbols,
-            strip_all_tags,
         )
     ]
 
@@ -433,16 +456,12 @@ def fsm_string(
     fst: pynini.Fst,
     registry: Registry,
     project: Literal["input", "output"] = "output",
-    strip_word_edge_symbols: bool = False,
-    strip_all_tags: bool = False,
 ) -> str:
     strings = fsm_strings(
         fst=fst,
         registry=registry,
         project=project,
         nshortest=1,
-        strip_word_edge_symbols=strip_word_edge_symbols,
-        strip_all_tags=strip_all_tags,
     )
     if len(strings) != 1:
         raise ValueError(f"Expected single string, got {strings}")
@@ -450,12 +469,12 @@ def fsm_string(
 
 
 def filter_strings_by_pattern(
-    input_fst: pynini.Fst,
-    pattern_fst: pynini.Fst,
+    input_fsa: pynini.Fst,
+    pattern_fsa: pynini.Fst,
     registry: Registry,
 ) -> list[str]:
     return fsm_strings(
-        pynini.intersect(input_fst, pattern_fst).optimize(),
+        pynini.intersect(input_fsa, pattern_fsa).optimize(),
         registry,
         nshortest=None,
     )

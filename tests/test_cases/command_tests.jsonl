@@ -1,9 +1,9 @@
 {"user_input":"add tok foo","expected_kwargs":{"verb":"add","struct":"Token","string":"foo"}} 
 {"user_input":"remove tok foo","expected_kwargs":{"verb":"remove","struct":"Token","string":"foo"}} 
-{"user_input":"remove tkg <foo>","expected_kwargs":{"verb":"remove","struct":"TokenGroup","string":"<foo>"}} 
-{"user_input":"remove tkg <foo> ","expected_kwargs":{"verb":"remove","struct":"TokenGroup","string":"<foo>"}} 
-{"user_input":"add map foo a > b; b > c","expected_kwargs":{"verb":"add","struct":"MappingNorm","name":"foo","mapping":[["a","b"],["b","c"]]}} 
-{"user_input":"add map foo a > b; b > c;","expected_kwargs":{"verb":"add","struct":"MappingNorm","name":"foo","mapping":[["a","b"],["b","c"]]}} 
-{"user_input":"add map foo a > b ;   b > c;  ","expected_kwargs":{"verb":"add","struct":"MappingNorm","name":"foo","mapping":[["a","b"],["b","c"]]}} 
-{"user_input":"add map foo a > b","expected_kwargs":{"verb":"add","struct":"MappingNorm","name":"foo","mapping":[["a","b"]]}} 
-{"user_input":"add map foo a >   b ","expected_kwargs":{"verb":"add","struct":"MappingNorm","name":"foo","mapping":[["a","b"]]}} 
+{"user_input":"add map foo a > b; b > c","expected_kwargs":{"verb":"add","struct":"MappingNorm","name":"foo","data":{"a":"b","b":"c"}}} 
+{"user_input":"add map foo a > b; b > c;","expected_kwargs":{"verb":"add","struct":"MappingNorm","name":"foo","data":{"a":"b","b":"c"}}} 
+{"user_input":"add map foo a > b ;   b > c;  ","expected_kwargs":{"verb":"add","struct":"MappingNorm","name":"foo","data":{"a":"b","b":"c"}}} 
+{"user_input":"add map foo a > b","expected_kwargs":{"verb":"add","struct":"MappingNorm","name":"foo","data":{"a":"b"}}} 
+{"user_input":"add map foo a >   b ","expected_kwargs":{"verb":"add","struct":"MappingNorm","name":"foo","data":{"a":"b"}}} 
+{"user_input":"add rwr foo a > b","expected_kwargs":{"verb":"add","struct":"CdrewriteNorm","name":"foo","data":{"input_str":"a","output_str":"b"}}} 
+{"user_input":"add rwr foo a > b L:c R:d","expected_kwargs":{"verb":"add","struct":"CdrewriteNorm","name":"foo","data":{"input_str":"a","output_str":"b","left_context":"c","right_context":"d"}}} 

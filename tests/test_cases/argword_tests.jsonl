@@ -1,6 +1,5 @@
 {"user_input":"foo","arg_word":"STRING", "arg_key": "string", "expected_value": "foo"}
-{"user_input":"foo","arg_word":"STRING_LIST", "arg_key": "string_list", "expected_value": ["foo"]}
-{"user_input":"foo bar baz","arg_word":"STRING_LIST", "arg_key": "string_list", "expected_value": ["foo", "bar", "baz"]}
-{"user_input":"foo \"bar baz\"","arg_word":"STRING_LIST", "arg_key": "string_list", "expected_value": ["foo", "bar baz"]}
-{"user_input":"foo > bar; baz > foo","arg_word":"MAPPING", "arg_key": "mapping", "expected_value": [["foo", "bar"], ["baz", "foo"]]}
-{"user_input":"foo > bar; baz > foo;","arg_word":"MAPPING", "arg_key": "mapping", "expected_value": [["foo", "bar"], ["baz", "foo"]]}
+{"user_input":"foo > bar; baz > foo","arg_word":"MAPPING", "arg_key": "mapping", "expected_value": {"foo": "bar", "baz": "foo"}}
+{"user_input":"foo > bar; baz > foo;","arg_word":"MAPPING", "arg_key": "mapping", "expected_value": {"foo": "bar", "baz": "foo"}}
+{"user_input":"a > b","arg_word":"REWRITE","arg_key":"rwr_args","expected_value":{"input_str":"a","output_str":"b"}} 
+{"user_input":"a > b L:c R:d","arg_word":"REWRITE","arg_key":"rwr_args","expected_value":{"input_str":"a","output_str":"b","left_context":"c","right_context":"d"}} 

@@ -32,12 +32,8 @@ named patterns.
 
 @frozen
 class Token:
-    """
-    A named token and its ID in the symbol table.
-    """
-
     string: str
-    id: int
+    kind: Literal["token"] = "token"
 
 
 @frozen
@@ -47,18 +43,14 @@ class AnonToken:
 
 
 @frozen
-class TokenGroup:
-    name: str
-    members: tuple[int, ...]
-
-
-@frozen
 class Pattern:
-    name: str
+    string: str
     value: str
+    kind: Literal["pattern"] = "pattern"
 
 
-type TokenLike = Token | AnonToken | TokenGroup | Pattern
+type Symbol = Token | Pattern
+type TokenLike = Token | AnonToken | Pattern
 
 """
 ### Norm
@@ -138,7 +130,12 @@ class NormalizationSpec:
 
 # Status indicating whether a string conforms to the constraints
 # defined by a normalization spec
-NormalizationStatus = Literal["licit", "illicit_token", "illicit_pattern"]
+NormalizationStatus = Literal[
+    "licit",
+    "illicit_token",
+    "illicit_pattern",
+    "compilation_error",
+]
 
 """
 ### Text
@@ -153,10 +150,12 @@ TextSource = Literal["user", "file"]
 class Text:
     """
     A raw (unnormalized) string with metadata about provenance.
+    Currently does not store a unique ID, instead other data
+    and commands can reference a text by its index in the array
+    of registered texts.
     """
 
     string: str
-    id: int
     source_type: TextSource = "user"
     source_value: str = Factory(lambda: str(datetime.now()))
 
@@ -165,12 +164,14 @@ class Text:
 class NormalizedText:
     """
     The output of some normalization spec and a status value.
+    `text_id` is a positional index of the source text, if
+    applicable.
     """
 
     string: str
-    text_id: int
     spec_name: str
     status: NormalizationStatus
+    text_id: int | None = None
 
 
 """
@@ -181,8 +182,8 @@ NAME_TO_STRUCT = {
     struct_type.__name__: struct_type
     for struct_type in [
         Token,
-        TokenGroup,
         Pattern,
+        Symbol,
         NormStep,
         PrebuiltNorm,
         MappingNorm,
@@ -192,15 +193,29 @@ NAME_TO_STRUCT = {
         NormalizedText,
     ]
 }
+NAME_TO_STRUCT = frozendict(NAME_TO_STRUCT)
 
 
 TYPE_TO_UNION = {}
-for union_type in (NormStep,):
+for union_type in (Symbol, NormStep):
     for subtype in get_args(union_type.__value__):
         TYPE_TO_UNION[subtype.__name__] = union_type.__name__
+TYPE_TO_UNION = frozendict(TYPE_TO_UNION)
+
+MACRO_STRUCT_TYPES = tuple(
+    name for name in NAME_TO_STRUCT.keys() if name not in TYPE_TO_UNION
+)
 
 
 def resolve_struct_type_name(struct_type_name: str) -> str:
+    """
+    If `struct_type_name` is the member of a union struct,
+    return the macro name for the union. Otherwise, return
+    `struct_type_name`.
+
+    This function is useful as the registry stores union
+    member structs under the macro struct name.
+    """
     macro_type = TYPE_TO_UNION.get(
         struct_type_name,
         struct_type_name,
@@ -219,6 +234,29 @@ def resolve_struct_type_fields(struct_type_name: str) -> list[str]:
     return sorted(field.name for field in fields(struct_type))
 
 
+ID_FIELDS = ("id", "name")
+
+"""
+## Registry helpers
+"""
+
+
+def get_structs(
+    struct_type_name: str,
+    registry: Registry,
+) -> tuple[object, ...]:
+    if union_type := TYPE_TO_UNION.get(struct_type_name, None):
+        union_struct_array = registry[union_type]
+        filtered = tuple(
+            filter(
+                (lambda struct: type(struct).__name__ == struct_type_name),
+                union_struct_array,
+            )
+        )
+        return filtered
+    return registry[struct_type_name]
+
+
 """
 ## Regex symbols
 
@@ -227,7 +265,7 @@ from pattern strings.
 """
 
 
-class RegexSymbols(Enum):
+class RegexSymbols(str, Enum):
     STAR = "*"
     PLUS = "+"
     OPTIONAL = "?"
@@ -253,6 +291,12 @@ UNARY_OPERATORS = (
     RegexSymbols.PLUS,
     RegexSymbols.OPTIONAL,
 )
+
+
+class ReservedSymbols(str, Enum):
+    SIGMA = "<Sigma>"
+    EPSILON = "<Empty>"
+
 
 """
 ## Special error classes
@@ -280,4 +324,12 @@ class FsaCompilationError(KayinoError):
 
 
 class StructDependencyError(KayinoError):
+    pass
+
+
+class StructRenameError(KayinoError):
+    pass
+
+
+class MappingConflictError(KayinoError):
     pass

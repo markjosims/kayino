@@ -3,7 +3,7 @@
 """
 
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable, Sequence
 from enum import Enum
 
@@ -11,14 +11,15 @@ from prompt_toolkit.contrib.regular_languages.compiler import _CompiledGrammar, 
 
 from kayino.models import (
     NAME_TO_STRUCT,
+    CdrewriteArgs,
     CdrewriteNorm,
+    MappingConflictError,
     MappingNorm,
     NormalizationSpec,
     NormStep,
     Pattern,
     Text,
     Token,
-    TokenGroup,
 )
 
 """
@@ -31,7 +32,6 @@ for struct_name in NAME_TO_STRUCT.keys():
     _struct_name_to_shorthands[struct_name].append(struct_name.lower())
 
 _struct_name_to_shorthands[Token.__name__].append("tok")
-_struct_name_to_shorthands[TokenGroup.__name__].append("tkg")
 _struct_name_to_shorthands[Pattern.__name__].append("pat")
 _struct_name_to_shorthands[MappingNorm.__name__].append("map")
 _struct_name_to_shorthands[CdrewriteNorm.__name__].append("rwr")
@@ -76,16 +76,10 @@ class ArgStrings(str, Enum):
     WORD = r"(?P<{arg_name}>\w+)"
     # word or quoted string
     STRING = rf"(?P<{{arg_name}}>{_word_or_quoted})"
-    # list of whitespace-separated words, with an optional final word
-    # lacking trailing whitespace
-    # words may optionally be wrapped in quotation marks
-    STRING_LIST = rf"(?P<{{arg_name}}>({_word_or_quoted}\s+)*({_word_or_quoted})?)"
     # angle-bracket wrapped word
     PATTERN_WORD = r"(?P<{arg_name}><\w+>)"
     # digit sequence
     INDEX = r"(?P<{arg_name}>\d+)"
-    # whitespace-delimited digit sequence
-    INDEX_LIST = r"(?P<{arg_name}>[\d\s]+)"
     # freeform text (including empty string)
     TEXT = r"(?P<{arg_name}>.*)"
     # quoted text (to prevent collision with other args)
@@ -100,13 +94,18 @@ class ArgStrings(str, Enum):
     LEFT_CONTEXT = rf"L:(?P<{{arg_name}}>{_word_or_quoted})"
     RIGHT_CONTEXT = rf"R:(?P<{{arg_name}}>{_word_or_quoted})"
 
+    REWRITE = (
+        rf"(?P<{{arg_name}}>{_word_or_quoted}\s+>\s+{_word_or_quoted}"
+        rf"(\s+L:{_word_or_quoted})?(\s+R:{_word_or_quoted})?)"
+    )
+
 
 # ArgString + arg name combos
 _string_word = ArgStrings.WORD.value.format(arg_name="string")
 _name_word = ArgStrings.WORD.value.format(arg_name="name")
 _kind_word = ArgStrings.WORD.value.format(arg_name="kind")
 
-_pattern_name = ArgStrings.PATTERN_WORD.value.format(arg_name="name")
+_pattern_string = ArgStrings.PATTERN_WORD.value.format(arg_name="string")
 
 # you see there are "strings" and then there are "string strings"
 _string_string = ArgStrings.STRING.value.format(arg_name="string")
@@ -125,63 +124,88 @@ _right_context = ArgStrings.RIGHT_CONTEXT.value.format(arg_name="right_context")
 
 _index = ArgStrings.INDEX.value.format(arg_name="index")
 
-_string_list = ArgStrings.STRING_LIST.value.format(arg_name="string_list")
-_index_list = ArgStrings.INDEX_LIST.value.format(arg_name="string_list")
-
 _mapping = ArgStrings.MAPPING.value.format(arg_name="mapping")
 
-"""
-## Argword-specific parsing hooks
-"""
-
-
-def _parse_string_list(text: str) -> list[str]:
-    parts = re.findall(_word_or_quoted, text)
-    parts = [part.replace('"', "") for part in parts]
-    return parts
-
-
-def _parse_mapping(text: str) -> list[tuple[str, str]]:
-    return re.findall(
-        _word_or_quoted + r"\s+>\s+" + _word_or_quoted + ";?",
-        text,
-    )
-
-
-def _parse_id_list(text: str) -> list[int]:
-    return list(map(int, re.findall(r"\b(\d+)\b", text)))
-
-
-_argstring_parse_hooks: dict[str, Callable] = {
-    "string_list": _parse_string_list,
-    "id_list": _parse_id_list,
-    "mapping": _parse_mapping,
-    "left_context": lambda s: s.removeprefix("L:"),
-    "right_context": lambda s: s.removeprefix("R:"),
-    "index": int,
-}
+_rwr_args = (
+    rf"(?P<rwr_args>{_input_string}\s+>\s+{_output_string}"
+    rf"(\s+{_left_context})?(\s+{_right_context})?)"
+)
 
 
 _struct_builder_patterns = {
     Token.__name__: _string_word,
-    Pattern.__name__: f"({_pattern_name} \\s+ {_value_string})",
-    TokenGroup.__name__: f"({_pattern_name} \\s+ ({_index_list}|{_string_list}))",
+    Pattern.__name__: rf"{_pattern_string} \s+ {_value_string}",
     MappingNorm.__name__: rf"{_name_word} \s+ {_mapping} (\s+ {_description})?",
-    CdrewriteNorm.__name__: rf"({_input_string} \s+ {_output_string} "
-    rf"\s+ {_left_context}? \s+ {_right_context}?)",
+    CdrewriteNorm.__name__: rf"{_name_word} \s+ {_rwr_args}",
     Text.__name__: _string_text,
     NormalizationSpec.__name__: _name_word,
 }
 
 _struct_removal_patterns = {
     Token.__name__: rf"({_string_word}|{_index})",
-    Pattern.__name__: rf"({_pattern_name}|{_index})",
-    TokenGroup.__name__: rf"({_pattern_name}|{_index})",
+    Pattern.__name__: rf"({_pattern_string}|{_index})",
     MappingNorm.__name__: rf"({_name_word}|{_index})",
     CdrewriteNorm.__name__: rf"({_name_word}|{_index})",
     Text.__name__: _index,
     NormalizationSpec.__name__: _name_word,
 }
+
+
+"""
+## Argword-specific parsing hooks
+
+_argstring_parse_hooks: Hooks that are called on the
+parsed value of a given argword, e.g. to parse a
+string of mappings a > b; b > c into a dictionary
+{"a": "b", "b": "c"}.
+
+_argstring_rename_map: A mapping of argword to
+struct field names. Needed because argword->struct field
+is a many-to-one mapping, e.g. multiple argwords are
+parsed as the `data` field for a struct.
+"""
+
+
+def _parse_mapping(text: str) -> dict[str, str]:
+    pairs = re.findall(
+        _word_or_quoted + r"\s+>\s+" + _word_or_quoted + ";?",
+        text,
+    )
+    intabs = [pair[0] for pair in pairs]
+    intab_counter = Counter(intabs)
+    duplicate = [pair for pair in pairs if intab_counter[pair[0]] > 1]
+    if duplicate:
+        raise MappingConflictError(f"Duplicate intabs: {duplicate}")
+    return dict(pairs)
+
+
+def _parse_rewrite_args(text: str) -> dict:
+    match = re.match(_rwr_args, text)
+    kwargs = match.groupdict()
+    kwargs.pop("rwr_args")
+    kwargs = {k: v for k, v in kwargs.items() if v is not None}
+    return kwargs
+
+
+_argstring_parse_hooks: dict[str, Callable] = {
+    "mapping": _parse_mapping,
+    "rwr_args": _parse_rewrite_args,
+    "index": int,
+    "string": lambda text: text.replace('"', ""),
+    "value": lambda text: text.replace('"', ""),
+    "description": lambda text: text.replace('"', ""),
+}
+_argstring_rename_map: dict[str, str] = {
+    "mapping": "data",
+    "rwr_args": "data",
+}
+_argstrings_to_drop: tuple[str, ...] = (
+    "left_context",
+    "right_context",
+    "input_str",
+    "output_str",
+)
+
 
 """
 ### Simple commands
@@ -191,8 +215,10 @@ REPL commands that do not need specific args per struct type
 
 _simple_command_templates = {
     "read": rf"((?P<verb>read) \s+ {_text})",
-    "tokenize": rf"((?P<verb>tokenize|tkz) \s+ ({_quoted_text}|{_index}))",
-    "process": rf"((?P<verb>process|pro?c) \s+ ({_quoted_text}|{_index}))",
+    "tokenize": rf"((?P<verb>tokenize|tkz) \s+ ({_index}|{_quoted_text}|{_text}))",
+    "process": rf"((?P<verb>process|pro?c) \s+ ({_index}|{_quoted_text}|{_text}))",
+    "apply": rf"((?P<verb>apply|apl) \s+ {_name_word} \s+ ({_index}|{_quoted_text}|{_text}))",
+    "oov": rf"((?P<verb>oov) (\s+(?P<oov_type>text|token)))",
 }
 
 """
@@ -218,12 +244,12 @@ Special REPL commands specific to the NormalizationSpec struct
 """
 
 _modify_spec_template = (
-    r"((?P<verb>spec) \s+ (?P<subverb>add|a|remove|rm)"
+    r"((?P<verb>spec) \s+ (?P<subverb>app(end)?|p(op)?)"
     r"\s+ (?P<field>{field}) \s+ {field_args})"
 )
 _modify_spec_field_patterns = {
     "steps": _name_word,
-    "licit_patterns": _text,
+    "licit_patterns": _pattern_string,
 }
 _modify_spec_field2shorthand = {
     "steps": ["ste?p"],
@@ -277,6 +303,9 @@ _shorthand_to_command_name = {
     "prc": "process",
     "proc": "process",
     "rm": "remove",
+    "p": "pop",
+    "app": "append",
+    "apl": "apply",
     "l": "list",
     "a": "add",
     "act": "activate",
@@ -368,6 +397,12 @@ def parse_command(
     for key, shorthand_map in _shorthand_maps.items():
         if value := match_kwargs.get(key, None):
             match_kwargs[key] = shorthand_map.get(value, value)
+    for argword, struct_field in _argstring_rename_map.items():
+        if value := match_kwargs.pop(argword, None):
+            match_kwargs[struct_field] = value
+    match_kwargs = {
+        k: v for k, v in match_kwargs.items() if k not in _argstrings_to_drop
+    }
     return match_kwargs
 
 

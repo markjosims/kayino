@@ -8,17 +8,18 @@ from rich.console import Console
 from rich.table import Table
 
 from kayino.acceptor import tokenize_str
-from kayino.core import normalize
+from kayino.core import apply_step, normalize
 from kayino.models import (
     KayinoError,
     NormalizationSpec,
+    NormalizationStatus,
     NormStep,
     Pattern,
     RegexSymbols,
     Registry,
     Text,
     Token,
-    TokenGroup,
+    get_structs,
     resolve_struct_type_fields,
 )
 from kayino.repl.grammar import parse_command
@@ -27,10 +28,10 @@ from kayino.repl.styles import TOKEN_STYLES
 from kayino.structs import (
     build_struct,
     fetch_struct,
-    get_structs,
     mutate_struct,
     register_struct,
     remove_struct,
+    struct_type_name,
     update_struct,
 )
 
@@ -134,13 +135,62 @@ def handle_process(
     spec = get_active_spec(state)
     if spec is None:
         raise NoActiveSpecError
-    normalized, status, message = normalize(
+    normalized, status, status_payload = normalize(
         text=input_str,
         spec=spec,
         registry=state.registry,
     )
     formatted_tokens = _tokenize_inner(
         normalized,
+        state.registry,
+    )
+    status_message = _status_message(
+        status=status,
+        status_payload=status_payload,
+    )
+    result_message = formatted_tokens + [("", "\n"), status_message]
+    result_message = FormattedText(result_message)
+    return result_message, state
+
+
+def _status_message(
+    status: NormalizationStatus,
+    status_payload: tuple[str, ...] | None,
+) -> tuple[str, ...]:
+    if status == "licit":
+        return (
+            "",
+            "Valid patterns:\n\t" + "\n\t".join(status_payload),
+        )
+    elif status == "illicit_token":
+        return (
+            "",
+            "Invalid tokens\n\t" + "\n\t".join(status_payload),
+        )
+    return (
+        "",
+        "No pattern matched!",
+    )
+
+
+def handle_apply(
+    kwargs: dict[str, str],
+    state: ReplState,
+) -> tuple[FormattedText | str, ReplState]:
+    input_str = _retrieve_text(kwargs, state.registry)
+    step = fetch_struct(
+        struct_type_name=NormStep.__name__,
+        field="name",
+        value=kwargs["name"],
+        registry=state.registry,
+    )
+    result = apply_step(
+        step=step,
+        text=input_str,
+    )
+
+    formatted_tokens = _tokenize_inner(
+        result,
         state.registry,
     )
     return formatted_tokens, state
@@ -152,7 +202,7 @@ def _tokenize_inner(input_str: str, registry: Registry) -> FormattedText:
     for word in token_list:
         if not word.string:
             continue
-        if not word.strip():
+        if not word.string.strip():
             format_string_tuples.append((" ", None))
         elif isinstance(word, Token):
             if (
@@ -161,13 +211,13 @@ def _tokenize_inner(input_str: str, registry: Registry) -> FormattedText:
             ):
                 format_string_tuples.append(_token_separator)
             format_string_tuples.append((TOKEN_STYLES["token"], word.string))
-        elif isinstance(word, (TokenGroup, Pattern)):
+        elif isinstance(word, Pattern):
             if (
                 format_string_tuples
                 and format_string_tuples[-1][-1] not in RegexSymbols
             ):
                 format_string_tuples.append(_token_separator)
-            format_string_tuples.append((TOKEN_STYLES["group"], word.name))
+            format_string_tuples.append((TOKEN_STYLES["group"], word.string))
 
         else:
             if (
@@ -211,14 +261,14 @@ def handle_spec(
     active_spec = get_active_spec(state)
     if not active_spec and not ((subverb == "activate") and ("name" in kwargs)):
         raise NoActiveSpecError
-    if subverb == "add":
-        return handle_spec_add(
+    if subverb == "append":
+        return handle_spec_append(
             kwargs=kwargs,
             state=state,
             active_spec=active_spec,
         )
-    elif subverb == "remove":
-        return handle_spec_remove(
+    elif subverb == "pop":
+        return handle_spec_pop(
             kwargs=kwargs,
             state=state,
             active_spec=active_spec,
@@ -232,27 +282,30 @@ def handle_spec(
     raise ValueError("Unknown subcommand for verb `spec`!")
 
 
-def handle_spec_add(
+def handle_spec_append(
     kwargs: dict[str, str],
     state: ReplState,
     active_spec: NormalizationSpec,
 ) -> tuple[FormattedText | str, ReplState]:
     field: Literal["steps", "licit_patterns"] = kwargs["field"]
     if field == "licit_patterns":
+        # fetch to check for existence
+        # but don't store result since only name is stored
         fetch_struct(
             struct_type_name=Pattern.__name__,
-            field="name",
-            value=kwargs["name"],
+            field="string",
+            value=kwargs["string"],
             registry=state.registry,
         )
         new_spec = mutate_struct(
             struct=active_spec,
             field=field,
-            data=kwargs["name"],
+            data=kwargs["string"],
             mutation_type="append",
         )
         status_message = "Appended pattern to spec!"
     elif field == "steps":
+        # ditto re: fetching
         fetch_struct(
             struct_type_name=NormStep.__name__,
             field="name",
@@ -280,13 +333,11 @@ def handle_spec_add(
     return status_message, new_state
 
 
-def handle_spec_remove(
+def handle_spec_pop(
     kwargs: dict[str, str],
     state: ReplState,
     active_spec: NormalizationSpec,
 ) -> tuple[FormattedText | str, ReplState]:
-    if not len(kwargs) == 1:
-        raise ValueError
     if kwargs["field"] == "licit_patterns":
         new_spec = mutate_struct(
             struct=active_spec,
@@ -337,6 +388,25 @@ def handle_spec_activate(
     return f"Current active spec: {active_spec}", state
 
 
+def handle_oov(
+    kwargs: dict[str, str],
+    state: ReplState,
+) -> tuple[FormattedText | str, ReplState]:
+    spec = get_active_spec(state)
+    if spec is None:
+        raise NoActiveSpecError
+
+
+def _process_all_texts(state) -> list:
+    processed = [
+        normalize(text.string, state.spec, state.registry)
+        for text in get_structs(
+            struct_type_name=Text.__name__,
+            registry=state.registry,
+        )
+    ]
+
+
 _verb_to_func = {
     "add": handle_add,
     "list": handle_list,
@@ -345,6 +415,7 @@ _verb_to_func = {
     "process": handle_process,
     "read": handle_read,
     "spec": handle_spec,
+    "apply": handle_apply,
 }
 
 

@@ -1,24 +1,24 @@
 import re
 from collections.abc import Mapping, Sequence
-from os import wait
 
 import pynini
+from pynini.lib.byte import BYTE
 from pynini.lib.rewrite import lattice_to_one_top_string
 
+from kayino.acceptor import filter_strings_by_pattern, fsa, tokenize_str
 from kayino.models import (
     CdrewriteArgs,
-    CdrewriteNorm,
-    MappingNorm,
+    FsaCompilationError,
     NormalizationSpec,
     NormalizationStatus,
     NormStep,
-    PrebuiltNorm,
+    Pattern,
     Registry,
 )
 from kayino.prebuilt import PREBUILT_NORM_FUNCS, PREBUILT_NORMS
 from kayino.structs import fetch_struct
 
-byte_star = pynini.closure(pynini.string_map(""))
+byte_star = pynini.closure(BYTE)
 
 
 def sorted_intab_regex(intab_array: Sequence[str]) -> re.Pattern:
@@ -108,6 +108,7 @@ def normalize(
     spec: NormalizationSpec,
     registry: Registry,
 ) -> tuple[str, NormalizationStatus, tuple[str, ...] | None]:
+    result = text
     for step_name in spec.steps:
         step = fetch_struct(
             struct_type_name=NormStep.__name__,
@@ -115,17 +116,46 @@ def normalize(
             value=step_name,
             registry=registry,
         )
-        text = apply_step(
-            text=text,
+        result = apply_step(
+            text=result,
             step=step,
         )
     status: NormalizationStatus = "licit"
     status_payload = None
-    # TODO: status resolution uses updated logic
-    # if status_payload := find_illicit_tokens(text, spec.token_set):
-    # status = "illicit_token"
-    # elif status_payload := test_fits_patterns(text, spec.patterns):
-    # pass
-    # else:
-    # status = "illicit_pattern"
-    return text, status, status_payload
+
+    tokens = tokenize_str(
+        text=result,
+        registry=registry,
+        no_patterns_or_regex=True,
+    )
+    oov_tokens = tuple(token.string for token in tokens if token.kind == "unrecognized")
+    if oov_tokens:
+        breakpoint()
+        status = "illicit_token"
+        status_payload = oov_tokens
+        return result, status, status_payload
+    valid_patterns = []
+    try:
+        result_fsa = fsa(text=result, registry=registry)
+    except Exception as e:
+        raise FsaCompilationError(f"Failed to compile text {text}") from e
+    for pattern_name in spec.licit_patterns:
+        pattern = fetch_struct(
+            struct_type_name=Pattern.__name__,
+            field="string",
+            value=pattern_name,
+            registry=registry,
+        )
+        pattern_fsa = fsa(text=pattern.value, registry=registry)
+        intersection = filter_strings_by_pattern(
+            input_fsa=result_fsa,
+            pattern_fsa=pattern_fsa,
+            registry=registry,
+        )
+        if intersection:
+            valid_patterns.append(pattern_name)
+    if not valid_patterns:
+        status = "illicit_pattern"
+    else:
+        status_payload = tuple(valid_patterns)
+    return result, status, status_payload
