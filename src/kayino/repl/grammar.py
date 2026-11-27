@@ -233,7 +233,11 @@ _simple_command_templates = {
     "tokenize": rf"((?P<verb>tokenize|tkz) \s+ ({_index}|{_quoted_text}|{_text}))",
     "process": rf"((?P<verb>process|pro?c) \s+ ({_index}|{_quoted_text}|{_text}))",
     "apply": rf"((?P<verb>apply|apl) \s+ {_name_word} \s+ ({_index}|{_quoted_text}|{_text}))",
-    "oov": rf"((?P<verb>oov) (\s+(?P<oov_type>text|token))? (\s+(?P<return_type>first|all))?)",
+    "oov": (
+        r"((?P<verb>oov) (\s+(?P<report>report)|"
+        r"(\s+(?P<oov_type>text|token))? (\s+(?P<return_type>first|all))?"
+        rf"(\s+{_index})?))"
+    ),
     "load": rf"((?P<verb>load) \s+(?P<path>.*))",
     "save": rf"((?P<verb>save) \s+(?P<path>.*))",
     "nonascii": rf"((?P<verb>nonascii) \s+ (?P<target>raw|processed))",

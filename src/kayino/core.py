@@ -1,8 +1,10 @@
 import re
-from collections.abc import Mapping, Sequence
+from collections import Counter
+from collections.abc import Iterable, Mapping, Sequence
 from functools import lru_cache
 
 import pynini
+from attrs import frozen
 from pynini.lib.rewrite import lattice_to_one_top_string
 
 from kayino.acceptor import (
@@ -229,3 +231,43 @@ def normalize(
     else:
         status_payload = tuple(valid_patterns)
     return result, status, status_payload
+
+
+@frozen
+class CorpusReport:
+    oov_occurrences: int
+    distinct_oov_characters: int
+    licit: int
+    illicit_token: int
+    compilation_error: int
+    illicit_pattern: int
+
+
+def summarize_corpus(
+    texts: Iterable[str],
+    spec: NormalizationSpec,
+    registry: Registry,
+) -> CorpusReport:
+    outcomes: Counter[NormalizationStatus] = Counter()
+    oov_occurrences = 0
+    oov_characters: set[str] = set()
+
+    for text in texts:
+        try:
+            _, status, payload = normalize(text, spec, registry)
+        except FsaCompilationError:
+            status = "compilation_error"
+        else:
+            if status == "illicit_token" and payload:
+                oov_occurrences += len(payload)
+                oov_characters.update(payload)
+        outcomes[status] += 1
+
+    return CorpusReport(
+        oov_occurrences=oov_occurrences,
+        distinct_oov_characters=len(oov_characters),
+        licit=outcomes["licit"],
+        illicit_token=outcomes["illicit_token"],
+        compilation_error=outcomes["compilation_error"],
+        illicit_pattern=outcomes["illicit_pattern"],
+    )

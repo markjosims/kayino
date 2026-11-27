@@ -14,7 +14,7 @@ from tqdm import tqdm
 
 from kayino.acceptor import tokenize_str
 from kayino.constants import MAX_OUTPUT_STRINGS
-from kayino.core import apply_step, normalize
+from kayino.core import apply_step, normalize, summarize_corpus
 from kayino.models import (
     KayinoError,
     MappingNorm,
@@ -452,7 +452,28 @@ def handle_oov(
     kwargs: dict[str, str],
     state: ReplState,
 ) -> tuple[FormattedText | str, ReplState]:
-    processed = _process_all_texts(state)
+    if "report" in kwargs:
+        spec = get_active_spec(state)
+        if spec is None:
+            raise NoActiveSpecError
+
+        report = summarize_corpus(
+            (text.string for text in state.texts),
+            spec,
+            state.registry,
+        )
+        return (
+            f"Corpus report for {spec.name}\n"
+            f"OOV character occurrences: {report.oov_occurrences}\n"
+            f"Distinct OOV characters: {report.distinct_oov_characters}\n"
+            f"Licit texts: {report.licit}\n"
+            f"Texts with OOV tokens: {report.illicit_token}\n"
+            f"Texts with FSA compilation errors: {report.compilation_error}\n"
+            f"Texts with illicit patterns: {report.illicit_pattern}",
+            state,
+        )
+
+    processed = _process_all_texts(state, start=kwargs.get("index", 0))
 
     oov_type: Literal["token", "text"] = kwargs["oov_type"]
     return_type: Literal["first", "all"] = kwargs.get("return_type", "first")
@@ -515,7 +536,7 @@ def handle_oov(
         raise ValueError(f"Invalid {oov_type=}")
 
 
-def _process_all_texts(state: ReplState) -> tqdm:
+def _process_all_texts(state: ReplState, start: int = 0) -> tqdm:
     spec = get_active_spec(state)
     if spec is None:
         raise NoActiveSpecError
@@ -527,9 +548,9 @@ def _process_all_texts(state: ReplState) -> tqdm:
                 spec,
                 state.registry,
             )
-            for text in state.texts
+            for text in state.texts[start:]
         ),
-        total=len(state.texts),
+        total=len(state.texts) - start,
     )
     return processed
 

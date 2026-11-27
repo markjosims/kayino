@@ -7,3 +7,6 @@
 {"user_input":"add map foo a >   b ","expected_kwargs":{"verb":"add","struct":"MappingNorm","name":"foo","data":{"a":"b"}}} 
 {"user_input":"add rwr foo a > b","expected_kwargs":{"verb":"add","struct":"CdrewriteNorm","name":"foo","data":{"input_str":"a","output_str":"b"}}} 
 {"user_input":"add rwr foo a > b L:c R:d","expected_kwargs":{"verb":"add","struct":"CdrewriteNorm","name":"foo","data":{"input_str":"a","output_str":"b","left_context":"c","right_context":"d"}}} 
+{"user_input":"oov token","expected_kwargs":{"verb":"oov","oov_type":"token"}}
+{"user_input":"oov token all 3","expected_kwargs":{"verb":"oov","oov_type":"token","return_type":"all","start":"3","index":3}}
+{"user_input":"look raw 3","expected_kwargs":{"verb":"look","target":"raw","index":3}}
