@@ -1,0 +1,56 @@
+{"group": "regex_language", "id": "precedence", "expression": "ab|c", "accepted": ["ab", "c"], "rejected": ["", "a", "ac", "abc"]}
+{"group": "regex_language", "id": "nested", "expression": "a(b|c(a|b))", "accepted": ["ab", "aca", "acb"], "rejected": ["a", "ac", "ca", "aba"]}
+{"group": "regex_language", "id": "plus", "expression": "(ab)+", "accepted": ["ab", "abab", "ababab"], "rejected": ["", "a", "abb", "aba"]}
+{"group": "regex_language", "id": "star", "expression": "a*b", "accepted": ["b", "ab", "aaab"], "rejected": ["", "a", "ba", "bb"]}
+{"group": "regex_language", "id": "optionals", "expression": "a?b?", "accepted": ["", "a", "b", "ab"], "rejected": ["ba", "aa", "bb"]}
+{"group": "regex_language", "id": "class", "expression": "[ab]c", "accepted": ["ac", "bc"], "rejected": ["c", "cc", "abc"]}
+{"group": "regex_language", "id": "nullable-repetition", "expression": "(a?)*b", "accepted": ["b", "ab", "aaab"], "rejected": ["", "a", "bb", "ba"]}
+{"group": "regex_language", "id": "duplicate-branches", "expression": "(a|a|ab)c", "accepted": ["ac", "abc"], "rejected": ["a", "ab", "bc", "aac"]}
+{"group": "regex_language", "id": "three-branches", "expression": "a|b|c", "accepted": ["a", "b", "c"], "rejected": ["", "ab", "abc"]}
+{"group": "malformed_regex_raises_value_error", "id": "unclosed-group", "expression": "(a"}
+{"group": "malformed_regex_raises_value_error", "id": "extra-closer", "expression": "a)"}
+{"group": "malformed_regex_raises_value_error", "id": "mismatched-closer", "expression": "(a]"}
+{"group": "malformed_regex_raises_value_error", "id": "empty-group", "expression": "()"}
+{"group": "malformed_regex_raises_value_error", "id": "missing-right-branch", "expression": "a|"}
+{"group": "malformed_regex_raises_value_error", "id": "missing-left-branch", "expression": "|a"}
+{"group": "malformed_regex_raises_value_error", "id": "empty-middle-branch", "expression": "a||b"}
+{"group": "malformed_regex_raises_value_error", "id": "leading-quantifier", "expression": "*a"}
+{"group": "malformed_regex_raises_value_error", "id": "repeated-quantifier", "expression": "a**"}
+{"group": "malformed_regex_raises_value_error", "id": "unclosed-class", "expression": "[ab"}
+{"group": "malformed_regex_raises_value_error", "id": "empty-class", "expression": "[]"}
+{"group": "malformed_regex_raises_value_error", "id": "missing-nested-branch", "expression": "a(b|)"}
+{"group": "malformed_regex_raises_value_error", "id": "leading-nested-quantifier", "expression": "a(+b)"}
+{"group": "malformed_regex_raises_value_error", "id": "unclosed-outer-group", "expression": "((a)"}
+{"group": "malformed_regex_raises_value_error", "id": "mixed-quantifiers", "expression": "(ab)?+"}
+{"group": "malformed_regex_raises_value_error", "id": "mismatched-class-closer", "expression": "a[bc)"}
+{"group": "byte_regex_quantifier_repeats_unicode_atom", "id": "empty", "inventory": []}
+{"group": "byte_regex_quantifier_repeats_unicode_atom", "id": "populated", "inventory": ["ŋ"]}
+{"group": "unregistered_literals_round_trip_in_byte_mode", "id": "prefix", "literal": "𠮷ch"}
+{"group": "unregistered_literals_round_trip_in_byte_mode", "id": "suffix", "literal": "ch𠮷"}
+{"group": "unregistered_literals_round_trip_in_byte_mode", "id": "infix", "literal": "ch𠮷ch"}
+{"group": "unregistered_literals_round_trip_in_byte_mode", "id": "mixed-script", "literal": "chЖ,é"}
+{"group": "unregistered_literals_round_trip_in_byte_mode", "id": "fullwidth-punctuation", "literal": "ch＋｜（）"}
+{"group": "unregistered_literals_round_trip_in_byte_mode", "id": "devanagari-joiner", "literal": "chक्‍ष"}
+{"group": "normalize_whitespace_trims_edges_and_collapses_internal_runs", "id": "ascii-runs", "source": "a  b\tc\r\nd", "normalized": "a b c d"}
+{"group": "normalize_whitespace_trims_edges_and_collapses_internal_runs", "id": "unicode-spaces", "source": "a  b", "normalized": "a b"}
+{"group": "normalize_whitespace_trims_edges_and_collapses_internal_runs", "id": "boundary-runs", "source": " \t𠮷\n ", "normalized": "𠮷"}
+{"group": "normalize_whitespace_trims_edges_and_collapses_internal_runs", "id": "whitespace-only", "source": "\t\n  ", "normalized": ""}
+{"group": "normalize_whitespace_trims_edges_and_collapses_internal_runs", "id": "empty", "source": "", "normalized": ""}
+{"group": "fsa_normalizes_whitespace_before_parsing", "id": "unregistered-character", "source": " ch\t𠮷\n", "normalized": "ch 𠮷"}
+{"group": "fsa_normalizes_whitespace_before_parsing", "id": "unicode-spaces", "source": "a  \tb", "normalized": "a b"}
+{"group": "fsa_normalizes_whitespace_before_parsing", "id": "regex-group", "source": "a\t (b|c)", "normalized": "a (b|c)"}
+{"group": "symbol_table_rejects_unregistered_character_next_to_known_token", "literal": "𠮷ch"}
+{"group": "symbol_table_rejects_unregistered_character_next_to_known_token", "literal": "ch𠮷"}
+{"group": "symbol_table_rejects_unregistered_character_next_to_known_token", "literal": "ch𠮷ch"}
+{"group": "byte_regex_matches_unregistered_characters", "id": "optional-supplementary-ideograph", "expression": "𠮷?", "accepted": ["", "𠮷"], "rejected": ["𠮷𠮷", "𠮟"]}
+{"group": "byte_regex_matches_unregistered_characters", "id": "mixed-alternation", "expression": "(ch|𠮷)+", "accepted": ["ch", "𠮷ch𠮷", "chch"], "rejected": ["", "c𠮷", "𠮟"]}
+{"group": "byte_regex_matches_unregistered_characters", "id": "unicode-class", "expression": "[é𠮷]ch", "accepted": ["éch", "𠮷ch"], "rejected": ["ch", "é𠮷ch", "éch"]}
+{"group": "byte_regex_matches_unregistered_characters", "id": "combining-mark", "expression": "é", "accepted": ["é"], "rejected": ["é", "e", "́"]}
+{"group": "byte_regex_matches_unregistered_characters", "id": "quantified-final-consonant", "expression": "xक्‍ष+", "accepted": ["xक्‍ष", "xक्‍षष"], "rejected": ["xक्‍", "xक्‍षक्‍ष"]}
+{"group": "byte_regex_matches_unregistered_characters", "id": "quantified-combining-mark", "expression": "á+", "accepted": ["á", "á́"], "rejected": ["a", "á", "áá"]}
+{"group": "byte_regex_matches_unregistered_characters", "id": "canonical-forms", "expression": "(é|é)", "accepted": ["é", "é"], "rejected": ["e", "é́"]}
+{"group": "malformed_byte_regex_with_unicode_and_whitespace", "expression": " \t𠮷|\n"}
+{"group": "malformed_byte_regex_with_unicode_and_whitespace", "expression": "(𠮷| )"}
+{"group": "malformed_byte_regex_with_unicode_and_whitespace", "expression": "(é\n"}
+{"group": "quantifier_repeats_longest_registered_token", "inventory": ["c", "h", "ch"], "expression": "ch+", "accepted": "ch ch", "rejected": "c h"}
+{"group": "whitespace_only_expression_matches_empty_expression", "expression": " \t\r\n\u2003"}

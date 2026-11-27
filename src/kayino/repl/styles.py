@@ -18,7 +18,7 @@ _yellow = "#FFBF00"
 class TOKEN_STYLES(str, Enum):
     operator = f"{_blue} bold"
     token = f"{_purple} bold"
-    unrecognized = f"bg:{_maroon} {_black}"
+    oov = f"bg:{_maroon} {_black}"
     separator = _white
 
 

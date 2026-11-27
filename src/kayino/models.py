@@ -6,6 +6,9 @@ from typing import Literal, TypeAliasType, TypedDict, get_args
 
 from attrs import Factory, fields, frozen
 from frozendict import frozendict
+from pygments.token import string_to_tokentype
+
+from kayino.constants import EMPTY_SYMBOL
 
 """
 ## Struct definitions
@@ -27,9 +30,15 @@ class Token:
 
 
 @frozen
-class AnonToken:
+class OovToken:
     string: str
-    kind: Literal["unrecognized", "operator"]
+    kind: Literal["oov"] = "oov"
+
+
+@frozen
+class Operator:
+    string: str
+    kind: Literal["operator"] = "operator"
 
 
 @frozen
@@ -40,7 +49,7 @@ class Pattern:
 
 
 type Symbol = Token | Pattern
-type TokenLike = Token | AnonToken | Pattern
+type TokenLike = Token | Pattern | OovToken | Operator
 
 """
 ### Norm
@@ -272,37 +281,36 @@ from pattern strings.
 """
 
 
-class RegexSymbols(str, Enum):
-    STAR = "*"
-    PLUS = "+"
-    OPTIONAL = "?"
-    UNION = "|"
-    CARET = "^"
-    LEFT_PAREN = "("
-    RIGHT_PAREN = ")"
-    LEFT_BRACKET = "["
-    RIGHT_BRACKET = "]"
-    DOT = "."
+class RegexSymbols(Enum):
+    STAR = Operator(string="*")
+    PLUS = Operator(string="+")
+    OPTIONAL = Operator(string="?")
+    UNION = Operator(string="|")
+    CARET = Operator(string="^")
+    LEFT_PAREN = Operator(string="(")
+    RIGHT_PAREN = Operator(string=")")
+    LEFT_BRACKET = Operator(string="[")
+    RIGHT_BRACKET = Operator(string="]")
+    DOT = Operator(string=".")
 
 
 LEFT_DELIMITERS = (
-    RegexSymbols.LEFT_BRACKET,
-    RegexSymbols.LEFT_PAREN,
+    RegexSymbols.LEFT_BRACKET.value,
+    RegexSymbols.LEFT_PAREN.value,
 )
 RIGHT_DELIMITERS = (
-    RegexSymbols.RIGHT_BRACKET,
-    RegexSymbols.RIGHT_PAREN,
+    RegexSymbols.RIGHT_BRACKET.value,
+    RegexSymbols.RIGHT_PAREN.value,
 )
 UNARY_OPERATORS = (
-    RegexSymbols.STAR,
-    RegexSymbols.PLUS,
-    RegexSymbols.OPTIONAL,
+    RegexSymbols.STAR.value,
+    RegexSymbols.PLUS.value,
+    RegexSymbols.OPTIONAL.value,
 )
 
-
-class ReservedSymbols(str, Enum):
-    SIGMA = "<Sigma>"
-    EPSILON = "<Empty>"
+STRING_TO_OPERATOR: dict[str, Operator] = {}
+for member in RegexSymbols:
+    STRING_TO_OPERATOR[member.value.string] = member.value
 
 
 """

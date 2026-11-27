@@ -11,7 +11,7 @@ from prompt_toolkit.contrib.regular_languages.lexer import GrammarLexer
 from prompt_toolkit.lexers import SimpleLexer
 from prompt_toolkit.styles import Style
 
-from kayino.prebuilt import replace_unicode
+from kayino.prebuilt import universal_preproc
 from kayino.repl.commands import repl_turn
 from kayino.repl.grammar import create_grammar
 from kayino.repl.models import ReplState
@@ -52,9 +52,8 @@ def repl():
                 completer=completer,
                 style=input_style,
             )
-            # for now assuming unicode replacement happens globally
-            # for all text inputs
-            user_response = replace_unicode(user_response)
+            if user_response:
+                user_response = universal_preproc(user_response)
         except KeyboardInterrupt:
             continue
         except EOFError:

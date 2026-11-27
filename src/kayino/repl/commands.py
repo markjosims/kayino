@@ -31,6 +31,7 @@ from kayino.models import (
     get_structs,
     resolve_struct_type_fields,
 )
+from kayino.prebuilt import universal_preproc
 from kayino.repl.grammar import parse_command
 from kayino.repl.models import NoActiveSpecError, ReplState, get_active_spec
 from kayino.repl.styles import TOKEN_STYLES
@@ -256,7 +257,7 @@ def handle_read(
     lines = Path(filepath).read_text().splitlines()
     texts = [
         Text(
-            string=line,
+            string=universal_preproc(line),
             source_type="file",
             source_value=filepath,
         )
@@ -480,7 +481,7 @@ def handle_oov(
         formatted = []
         oov_tokens = set(oov_tokens)
         for char in oov_tokens:
-            formatted.append((TOKEN_STYLES.unrecognized, char))
+            formatted.append((TOKEN_STYLES.oov, char))
             formatted.append(("", "\t"))
             formatted.append(("", _unicode_point(char)))
             formatted.append(("", "\t"))
@@ -496,7 +497,7 @@ def handle_oov(
             return FormattedText(
                 zip(
                     oov_texts,
-                    [TOKEN_STYLES.unrecognized.value] * len(oov_texts),
+                    [TOKEN_STYLES.oov.value] * len(oov_texts),
                 )
             ), state
         elif return_type == "first":
@@ -504,7 +505,7 @@ def handle_oov(
             return FormattedText(
                 [
                     (
-                        TOKEN_STYLES.unrecognized.value,
+                        TOKEN_STYLES.oov.value,
                         oov_text,
                     )
                 ]
@@ -514,20 +515,21 @@ def handle_oov(
         raise ValueError(f"Invalid {oov_type=}")
 
 
-def _process_all_texts(state: ReplState) -> list:
+def _process_all_texts(state: ReplState) -> tqdm:
     spec = get_active_spec(state)
     if spec is None:
         raise NoActiveSpecError
 
     processed = tqdm(
-        [
+        (
             normalize(
                 text.string,
                 spec,
                 state.registry,
             )
             for text in state.texts
-        ]
+        ),
+        total=len(state.texts),
     )
     return processed
 

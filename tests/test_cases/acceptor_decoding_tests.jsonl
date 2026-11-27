@@ -1,0 +1,8 @@
+{"group": "weighted_decoder_projects_and_limits_paths", "project": "input", "expected": [["ŋ", 1.0], ["𠮷", 3.0]]}
+{"group": "weighted_decoder_projects_and_limits_paths", "project": "output", "expected": [["é", 1.0], ["", 3.0]]}
+{"group": "fst_decoders_without_registry", "id": "string", "decoder": "fsm_string", "expected": "ŋ𠮷"}
+{"group": "fst_decoders_without_registry", "id": "strings", "decoder": "fsm_strings", "expected": ["ŋ𠮷"]}
+{"group": "fst_decoders_without_registry", "id": "weighted-strings", "decoder": "fsm_strings_and_weights", "expected": [["ŋ𠮷", 2.5]]}
+{"group": "decoding_case", "id": "table", "use_symbol_table": true, "inventory": ["ch", "a"], "source": "ch a", "expected": "cha"}
+{"group": "decoding_case", "id": "no-table", "use_symbol_table": false, "inventory": ["ch", "a"], "source": "ch ŋ", "expected": "ch ŋ"}
+{"group": "decode_labels_without_registry", "source": "ŋ𠮷", "expected": "ŋ𠮷"}

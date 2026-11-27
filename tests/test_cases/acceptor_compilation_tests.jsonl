@@ -1,0 +1,23 @@
+{"group": "parse_pattern_uses_provided_symbol_table", "id": "table", "with_table": true}
+{"group": "parse_pattern_uses_provided_symbol_table", "id": "no-table", "with_table": false}
+{"group": "fsa_without_symbol_table_accepts_oov_symbols", "id": "empty", "inventory": []}
+{"group": "fsa_without_symbol_table_accepts_oov_symbols", "id": "populated", "inventory": ["ch"]}
+{"group": "fsa_expands_registered_patterns", "id": "table", "use_symbol_table": true}
+{"group": "fsa_expands_registered_patterns", "id": "no-table", "use_symbol_table": false}
+{"group": "fsa_rejects_recursive_patterns", "id": "direct", "patterns": [["<First>", "<First>"]]}
+{"group": "fsa_rejects_recursive_patterns", "id": "mutual", "patterns": [["<First>", "<Second>"], ["<Second>", "<First>"]]}
+{"group": "empty_expression_accepts_only_epsilon", "id": "table", "use_symbol_table": true}
+{"group": "empty_expression_accepts_only_epsilon", "id": "no-table", "use_symbol_table": false}
+{"group": "grouped_alternation_with_optional_suffix", "id": "table", "use_symbol_table": true}
+{"group": "grouped_alternation_with_optional_suffix", "id": "no-table", "use_symbol_table": false}
+{"group": "fsa_rejects_pattern_references_without_registry", "id": "standalone", "expression": "<Stem>"}
+{"group": "fsa_rejects_pattern_references_without_registry", "id": "concatenated", "expression": "ch<Stem>"}
+{"group": "fsa_rejects_pattern_references_without_registry", "id": "alternation", "expression": "(ŋ|<Stem>)"}
+{"group": "fsa_rejects_pattern_references_without_registry", "id": "quantified", "expression": "<Stem>+"}
+{"group": "fsa_rejects_pattern_references_without_registry", "id": "adjacent", "expression": "<First><Second>"}
+{"group": "fsa_with_symbol_table_compiles_registered_token", "token": "ch", "expression": "ch", "arcs": 1}
+{"group": "fsa_with_symbol_table_rejects_oov_symbol", "token": "ch", "expression": "ŋ"}
+{"group": "pattern_cache_keeps_registries_separate", "pattern": "<Stem>", "values": ["ŋ", "é", "ŋ"]}
+{"group": "pattern_expands_unregistered_characters_with_symbol_table_off", "token": "ch", "pattern": ["<Stem>", "ch(ŋ|𠮷)"], "expected": ["chŋ", "ch𠮷"]}
+{"group": "fsa_compiles_without_registry", "expression": "ch(ŋ|𠮷)?", "expected": ["ch", "chŋ", "ch𠮷"]}
+{"group": "fsa_compiles_empty_expression_without_registry", "expression": "", "expected": ""}

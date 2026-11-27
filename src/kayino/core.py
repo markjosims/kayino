@@ -3,10 +3,15 @@ from collections.abc import Mapping, Sequence
 from functools import lru_cache
 
 import pynini
-from pynini.lib.byte import BYTE
 from pynini.lib.rewrite import lattice_to_one_top_string
 
-from kayino.acceptor import filter_strings_by_pattern, fsa, tokenize_str
+from kayino.acceptor import (
+    byte_star,
+    filter_strings_by_pattern,
+    fsa,
+    get_sigma_star,
+    tokenize_str,
+)
 from kayino.models import (
     CdrewriteArgs,
     FsaCompilationError,
@@ -16,10 +21,8 @@ from kayino.models import (
     Pattern,
     Registry,
 )
-from kayino.prebuilt import PREBUILT_NORM_FUNCS, PREBUILT_NORMS
+from kayino.prebuilt import PREBUILT_NORM_FUNCS
 from kayino.structs import fetch_struct
-
-byte_star = pynini.closure(BYTE)
 
 
 def sorted_intab_regex(intab_array: Sequence[str]) -> re.Pattern:
@@ -56,15 +59,45 @@ def apply_prebuilt(
     return text
 
 
+def _compile_cdrewrite(
+    cdrewrite_args: CdrewriteArgs,
+    registry: Registry | None,
+) -> pynini.Fst:
+    input_fsa = fsa(
+        text=cdrewrite_args.input_str,
+        registry=registry,
+    )
+    output_fsa = fsa(
+        text=cdrewrite_args.output_str,
+        registry=registry,
+    )
+    left_context = fsa(
+        text=cdrewrite_args.left_context,
+        registry=registry,
+    )
+    right_context = fsa(
+        text=cdrewrite_args.right_context,
+        registry=registry,
+    )
+
+    rewrite_fst = pynini.cdrewrite(
+        tau=pynini.cross(input_fsa, output_fsa),
+        l=left_context,
+        r=right_context,
+        sigma_star=byte_star(),
+    )
+    rewrite_fst.optimize()
+    return rewrite_fst
+
+
 def apply_cdrewrite(
     text: str,
     cdrewrite_args: CdrewriteArgs,
+    registry: Registry | None = None,
 ) -> str:
-    rewrite_fst = pynini.cdrewrite(
-        tau=pynini.cross(cdrewrite_args.input_str, cdrewrite_args.output_str),
-        l=cdrewrite_args.left_context,
-        r=cdrewrite_args.right_context,
-        sigma_star=byte_star,
+    rewrite_fst = _compile_cdrewrite(
+        cdrewrite_args,
+        registry=registry,
     )
     result = lattice_to_one_top_string(text @ rewrite_fst)
     return result
@@ -129,9 +162,11 @@ def intersect_pattern(
     return tuple(intersection)
 
 
+@lru_cache(maxsize=16384)
 def apply_step(
     text: str,
     step: NormStep,
+    registry: Registry | None = None,
 ) -> str:
     if step.kind == "prebuilt":
         return apply_prebuilt(
@@ -142,6 +177,7 @@ def apply_step(
         return apply_cdrewrite(
             text=text,
             cdrewrite_args=step.data,
+            registry=registry,
         )
     elif step.kind == "mapping":
         return apply_mappings(
@@ -151,7 +187,7 @@ def apply_step(
     raise ValueError("Unknown normstep type", step.kind)
 
 
-@lru_cache(maxsize=1_024)
+@lru_cache(maxsize=16384)
 def normalize(
     text: str,
     spec: NormalizationSpec,
@@ -168,6 +204,7 @@ def normalize(
         result = apply_step(
             text=result,
             step=step,
+            registry=registry,
         )
     status: NormalizationStatus = "licit"
     status_payload = None
@@ -177,7 +214,7 @@ def normalize(
         registry=registry,
         no_patterns_or_regex=True,
     )
-    oov_tokens = tuple(token.string for token in tokens if token.kind == "unrecognized")
+    oov_tokens = tuple(token.string for token in tokens if token.kind == "oov")
     if oov_tokens:
         status = "illicit_token"
         status_payload = oov_tokens
