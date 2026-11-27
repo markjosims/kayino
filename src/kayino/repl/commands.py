@@ -10,8 +10,10 @@ from prompt_toolkit.contrib.regular_languages.compiler import _CompiledGrammar
 from prompt_toolkit.formatted_text import ANSI, FormattedText, to_formatted_text
 from rich.console import Console
 from rich.table import Table
+from tqdm import tqdm
 
 from kayino.acceptor import tokenize_str
+from kayino.constants import MAX_OUTPUT_STRINGS
 from kayino.core import apply_step, normalize
 from kayino.models import (
     KayinoError,
@@ -290,13 +292,13 @@ def handle_map(
             mutation_type="append",
         )
         status = f"Inserted {pair} to map"
-    elif subverb == "append":
+    elif subverb == "pop":
         key = kwargs["intab"]
         new_map = mutate_struct(
             struct=map_step,
             field="data",
             data=key,
-            mutation_type="append",
+            mutation_type="pop",
         )
         status = f"Popped {key} from map"
     else:
@@ -517,14 +519,16 @@ def _process_all_texts(state: ReplState) -> list:
     if spec is None:
         raise NoActiveSpecError
 
-    processed = [
-        normalize(
-            text.string,
-            spec,
-            state.registry,
-        )
-        for text in state.texts
-    ]
+    processed = tqdm(
+        [
+            normalize(
+                text.string,
+                spec,
+                state.registry,
+            )
+            for text in state.texts
+        ]
+    )
     return processed
 
 
@@ -622,6 +626,20 @@ def handle_look_unicode(
     ), state
 
 
+def handle_search(
+    kwargs: dict[str, str],
+    state: ReplState,
+) -> tuple[FormattedText | str, ReplState]:
+    query = kwargs["query"]
+    hits = []
+    for text in state.texts:
+        if query in text.string:
+            hits.append(text.string)
+        if len(hits) >= MAX_OUTPUT_STRINGS:
+            break
+    return "\n".join(hits), state
+
+
 _verb_to_func = {
     "add": handle_add,
     "list": handle_list,
@@ -637,6 +655,7 @@ _verb_to_func = {
     "nonascii": handle_nonascii,
     "look": handle_look_unicode,
     "map": handle_map,
+    "search": handle_search,
 }
 
 

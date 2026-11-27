@@ -29,6 +29,7 @@ from kayino.models import (
     StructDependencyError,
     StructNotFoundError,
     StructRenameError,
+    Symbol,
     get_structs,
     resolve_struct_type_fields,
     resolve_struct_type_name,
@@ -130,6 +131,12 @@ for struct_type_name in MACRO_STRUCT_TYPES:
                     field=field,
                 )
             )
+_registry_validation_hooks[Symbol.__name__].append(
+    functools.partial(
+        _array_ids_unique,
+        field="string",
+    )
+)
 
 
 def validate_structs_in_registry(

@@ -13,7 +13,6 @@ from functools import lru_cache, wraps
 from typing import Literal
 
 import pynini
-from frozendict import frozendict
 from pynini.lib import rewrite
 
 from kayino.constants import MAX_OUTPUT_STRINGS

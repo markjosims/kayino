@@ -14,6 +14,7 @@ dependencies = [
   "pynini>=2.1.7",
   "rich>=15.0.0",
   "tabulate>=0.10.0",
+  "tqdm>=4.70.1",
 ]
 
 [project.scripts]

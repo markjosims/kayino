@@ -35,7 +35,7 @@ PREBUILT_NORMS["remove_punct"] = PrebuiltNorm(
 _punct_re = re.compile("[" + re.escape(punctuation) + "]")
 PREBUILT_NORM_FUNCS["remove_punct"] = functools.partial(_punct_re.sub, "")
 
-_unicode_token = re.compile(r"U\+([a-f0-9]{4})")
+_unicode_token = re.compile(r"U\+([a-f0-9]{4})", flags=re.IGNORECASE)
 
 
 def _point_to_char(hex_str: re.Match) -> str:

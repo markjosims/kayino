@@ -67,7 +67,7 @@ _all_struct_regex = _regex_union(_all_struct_names)
 ## Arg capture groups
 """
 
-_word_or_quoted = r"(\"([^\"]+)\"|(\w+))"
+_word_or_quoted = r"(\"[^\"]+\"|[^\s]+)"
 
 
 class ArgStrings(str, Enum):
@@ -168,18 +168,19 @@ def _parse_mapping(text: str) -> dict[str, str]:
         _word_or_quoted + r"\s+>\s+" + _word_or_quoted + ";?",
         text,
     )
+    formatted_pairs = []
+
+    intab_counter = Counter()
     for i, pair in enumerate(pairs):
-        # TODO: ad-hoc replacing <Empty> -> "" for mapping inputs
-        # need to think about whether this is something that needs
-        # to be handled more systematically
-        if pair[1] == "<Empty>":
-            pairs[i] = (pair[0], "")
-    intabs = [pair[0] for pair in pairs]
-    intab_counter = Counter(intabs)
+        intab, outtab = pair
+        intab = _parse_text(intab)
+        outtab = _parse_text(outtab)
+        formatted_pairs.append((intab, outtab))
+        intab_counter[intab] += 1
     duplicate = [pair for pair in pairs if intab_counter[pair[0]] > 1]
     if duplicate:
         raise MappingConflictError(f"Duplicate intabs: {duplicate}")
-    return dict(pairs)
+    return dict(formatted_pairs)
 
 
 def _parse_rewrite_args(text: str) -> dict:
@@ -190,13 +191,24 @@ def _parse_rewrite_args(text: str) -> dict:
     return kwargs
 
 
+def _parse_text(text: str | None) -> str:
+    if text is None:
+        return ""
+    text = text.strip('"')
+    if text == "<Empty>":
+        return ""
+    return text
+
+
 _argstring_parse_hooks: dict[str, Callable] = {
     "mapping": _parse_mapping,
     "rwr_args": _parse_rewrite_args,
     "index": int,
-    "string": lambda text: text.replace('"', "") if text is not None else "",
-    "value": lambda text: text.replace('"', "") if text is not None else "",
-    "description": lambda text: text.replace('"', "") if text is not None else "",
+    "intab": _parse_text,
+    "outtab": _parse_text,
+    "string": _parse_text,
+    "value": _parse_text,
+    "description": _parse_text,
 }
 _argstring_rename_map: dict[str, str] = {
     "mapping": "data",
@@ -227,6 +239,7 @@ _simple_command_templates = {
     "nonascii": rf"((?P<verb>nonascii) \s+ (?P<target>raw|processed))",
     "look": rf"((?P<verb>look) \s+ (?P<target>raw|processed))"
     rf"\s+ ({_index}|{_quoted_text}|{_text})",
+    "search": rf"((?P<verb>search) \s+ (?P<query>.*))",
 }
 
 """
