@@ -22,6 +22,10 @@ class TOKEN_STYLES(str, Enum):
     separator = _white
 
 
+class STATUS_STYLES(str, Enum):
+    success = f"{_green} bold"
+
+
 class INPUT_STYLES(str, Enum):
     verb = f"{_green} bold"
     subverb = f"{_blue} bold"

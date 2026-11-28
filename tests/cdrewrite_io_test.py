@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import pytest
 from pynini.lib import rewrite
 
@@ -10,6 +13,12 @@ from kayino.models import (
     Registry,
     Token,
 )
+
+
+EXCLUSION_FILE = Path(__file__).parent / "test_cases" / "cdrewrite_exclusion_tests.jsonl"
+EXCLUSION_CASES = [
+    json.loads(line) for line in EXCLUSION_FILE.read_text(encoding="utf-8").splitlines()
+]
 
 
 @pytest.mark.parametrize(
@@ -134,10 +143,16 @@ def test_apply_step_expands_named_match_and_replacement():
     assert apply_step("ŋe che xe", step, registry) == "é é xe"
 
 
-def test_negated_class_uses_registry_inventory():
-    registry = Registry(Symbol=(Token("a"), Token("b"), Token("ŋ")))
+@pytest.mark.parametrize("case", EXCLUSION_CASES, ids=[case["id"] for case in EXCLUSION_CASES])
+def test_rewrite_exclusion(case):
+    inventory = case["inventory"]
+    registry = None if inventory is None else Registry(
+        Symbol=tuple(Token(value) for value in inventory)
+    )
 
-    assert apply_cdrewrite("a b ŋ 𠮷", CdrewriteArgs("[^a]", "x"), registry) == "a x x 𠮷"
+    assert apply_cdrewrite(case["text"], CdrewriteArgs(**case["rule"]), registry) == case[
+        "expected"
+    ]
 
 
 @pytest.mark.parametrize(

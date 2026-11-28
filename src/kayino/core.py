@@ -140,24 +140,22 @@ def test_fits_patterns(
 
 
 def intersect_pattern(
-    text: str,
-    pattern_name: str,
+    target: str,
+    pattern: str,
     registry: Registry,
 ) -> tuple[str, ...]:
     try:
-        text_fsa = fsa(text=text, registry=registry)
+        pattern_fsa = fsa(text=pattern, registry=registry)
     except Exception as e:
-        raise FsaCompilationError(f"Failed to compile text {text}") from e
+        raise FsaCompilationError(f"Failed to compile pattern {pattern}") from e
 
-    pattern = fetch_struct(
-        struct_type_name=Pattern.__name__,
-        field="string",
-        value=pattern_name,
-        registry=registry,
-    )
-    pattern_fsa = fsa(text=pattern.value, registry=registry)
+    try:
+        target_fsa = fsa(text=target, registry=registry)
+    except Exception as e:
+        raise FsaCompilationError(f"Failed to compile target {target}") from e
+
     intersection = filter_strings_by_pattern(
-        input_fsa=text_fsa,
+        input_fsa=target_fsa,
         pattern_fsa=pattern_fsa,
         registry=registry,
     )

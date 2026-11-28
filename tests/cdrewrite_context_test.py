@@ -55,20 +55,6 @@ def test_ambiguous_replacement_is_irrelevant_when_context_blocks_match():
     assert apply_cdrewrite("kən pət ə", rule) == "kən pət ə"
 
 
-@pytest.mark.parametrize(
-    ("left", "right", "expected"),
-    [
-        pytest.param("[^a]", "", "at əd ŋd ɛt", id="left"),
-        pytest.param("", "[^a]", "ta də dŋ tɛ", id="right"),
-    ],
-)
-def test_negated_context_uses_only_inventory_tokens(left, right, expected):
-    registry = Registry(Symbol=(Token("a"), Token("ə"), Token("ŋ")))
-    text = "at ət ŋt ɛt" if left else "ta tə tŋ tɛ"
-
-    assert apply_cdrewrite(text, CdrewriteArgs("t", "d", left, right), registry) == expected
-
-
 def test_named_contexts_can_share_a_nested_pattern():
     registry = Registry(
         Symbol=(

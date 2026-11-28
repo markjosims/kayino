@@ -31,8 +31,8 @@ from kayino.models import (
     StructRenameError,
     Symbol,
     get_structs,
+    resolve_macro_struct_type_name,
     resolve_struct_type_fields,
-    resolve_struct_type_name,
 )
 from kayino.prebuilt import PREBUILT_NORMS
 
@@ -110,7 +110,7 @@ def _array_ids_unique(
     field: str,
     registry: Registry,
 ):
-    macro_struct_name = resolve_struct_type_name(struct_type_name)
+    macro_struct_name = resolve_macro_struct_type_name(struct_type_name)
     id_array = [
         getattr(struct, field) for struct in get_structs(macro_struct_name, registry)
     ]
@@ -323,7 +323,7 @@ def register_struct(
 
     Returns the mutated registry.
     """
-    struct_type_name = resolve_struct_type_name(type(struct).__name__)
+    struct_type_name = resolve_macro_struct_type_name(type(struct).__name__)
     curr_struct_array = get_structs(struct_type_name, registry)
     new_struct_array = curr_struct_array + (struct,)
     new_registry = evolve(registry, **{struct_type_name: new_struct_array})
@@ -389,7 +389,7 @@ def remove_struct(
 
     Returns the mutated registry.
     """
-    struct_type_name = resolve_struct_type_name(type(struct).__name__)
+    struct_type_name = resolve_macro_struct_type_name(type(struct).__name__)
     for func in _pre_remove_hooks[struct_type_name]:
         func(
             struct=struct,
@@ -425,7 +425,7 @@ def put_struct(
         if getattr(old_struct, field) != getattr(new_struct, field):
             raise StructRenameError("Renaming structs not supported.")
 
-    struct_type_name = resolve_struct_type_name(type(old_struct).__name__)
+    struct_type_name = resolve_macro_struct_type_name(type(old_struct).__name__)
     struct_array = get_structs(struct_type_name, registry)
     filtered_struct_array = tuple(
         curr_struct for curr_struct in struct_array if curr_struct != old_struct

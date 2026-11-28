@@ -1,6 +1,7 @@
 import json
 import unicodedata
-from collections.abc import Sequence
+from collections import defaultdict
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Literal
 
@@ -14,7 +15,7 @@ from tqdm import tqdm
 
 from kayino.acceptor import tokenize_str
 from kayino.constants import MAX_OUTPUT_STRINGS
-from kayino.core import apply_step, normalize, summarize_corpus
+from kayino.core import apply_step, intersect_pattern, normalize, summarize_corpus
 from kayino.models import (
     KayinoError,
     MappingNorm,
@@ -26,15 +27,17 @@ from kayino.models import (
     Registry,
     StateLoadError,
     StateSaveError,
+    Symbol,
     Text,
     Token,
     get_structs,
+    resolve_macro_struct_type_name,
     resolve_struct_type_fields,
 )
 from kayino.prebuilt import universal_preproc
 from kayino.repl.grammar import parse_command
 from kayino.repl.models import NoActiveSpecError, ReplState, get_active_spec
-from kayino.repl.styles import TOKEN_STYLES
+from kayino.repl.styles import STATUS_STYLES, TOKEN_STYLES
 from kayino.structs import (
     build_struct,
     fetch_struct,
@@ -88,7 +91,7 @@ def _rich_table(
     cols: Sequence[str],
     rows: Sequence[Sequence[str]],
 ) -> FormattedText:
-    console = Console()
+    console = Console(markup=False)
     with console.capture() as capture:
         table = Table(title=title)
         for col in cols:
@@ -101,19 +104,49 @@ def _rich_table(
     return formatted
 
 
+def _unicode_points_for_symbol(struct: Symbol) -> str:
+    return _all_unicode_points(struct.string)
+
+
+def _unicode_names_for_symbol(struct: Symbol) -> str:
+    return " ".join(map(unicodedata.name, struct.string))
+
+
+_extra_col_hooks: dict[
+    str,
+    dict[
+        str,
+        Callable[
+            [object],
+            str,
+        ],
+    ],
+] = defaultdict(dict)
+_extra_col_hooks[Symbol.__name__]["unicode_point"] = _unicode_points_for_symbol
+_extra_col_hooks[Symbol.__name__]["unicode_name"] = _unicode_names_for_symbol
+
+
 def handle_list(
     kwargs: dict[str, str],
     state: ReplState,
 ) -> tuple[str, ReplState]:
     struct_type_name = kwargs.pop("struct")
+    macro_struct_name = resolve_macro_struct_type_name(struct_type_name)
     struct_array = get_structs(struct_type_name, state.registry)
     struct_fields = resolve_struct_type_fields(struct_type_name)
+    extra_cols = list(_extra_col_hooks[macro_struct_name].keys())
+    cols = struct_fields + extra_cols
     rows = []
     for struct in struct_array:
-        rows.append([str(getattr(struct, col, "")) for col in struct_fields])
+        field_data = [str(getattr(struct, col, "")) for col in struct_fields]
+        extra_data = [
+            _extra_col_hooks[macro_struct_name][col_name](struct)
+            for col_name in extra_cols
+        ]
+        rows.append(field_data + extra_data)
     formatted = _rich_table(
         title=struct_type_name,
-        cols=struct_fields,
+        cols=cols,
         rows=rows,
     )
     return formatted, state
@@ -494,11 +527,14 @@ def handle_oov(
                     for token in (payload or [])
                     if status == "illicit_token"
                 ),
-                # TODO: smarter handling of no OOV cases across all branches
-                "no oov!",
+                "",
             )
         else:
             raise ValueError(f"Invalid {return_type}")
+        if not oov_tokens:
+            return FormattedText(
+                [(STATUS_STYLES.success.value, "No OOV tokens found.")]
+            ), state
         formatted = []
         oov_tokens = set(oov_tokens)
         for char in oov_tokens:
@@ -511,29 +547,21 @@ def handle_oov(
         return FormattedText(formatted), state
 
     if oov_type == "text":
+        matches = (text for text, status, _ in processed if status != "licit")
         if return_type == "all":
-            oov_texts = tuple(
-                text for text, status, _ in processed if status != "licit"
-            )
-            return FormattedText(
-                zip(
-                    oov_texts,
-                    [TOKEN_STYLES.oov.value] * len(oov_texts),
-                )
-            ), state
+            oov_texts = tuple(matches)
         elif return_type == "first":
-            oov_text = next(text for text, status, _ in processed if status != "licit")
-            return FormattedText(
-                [
-                    (
-                        TOKEN_STYLES.oov.value,
-                        oov_text,
-                    )
-                ]
-            ), state
+            first_match = next(matches, None)
+            oov_texts = () if first_match is None else (first_match,)
         else:
             raise ValueError(f"Invalid {return_type=}")
-        raise ValueError(f"Invalid {oov_type=}")
+        if not oov_texts:
+            return FormattedText(
+                [(STATUS_STYLES.success.value, "No non-licit texts found.")]
+            ), state
+        return FormattedText([(TOKEN_STYLES.oov.value, "\n".join(oov_texts))]), state
+
+    raise ValueError(f"Invalid {oov_type=}")
 
 
 def _process_all_texts(state: ReplState, start: int = 0) -> tqdm:
@@ -550,7 +578,8 @@ def _process_all_texts(state: ReplState, start: int = 0) -> tqdm:
             )
             for text in state.texts[start:]
         ),
-        total=len(state.texts) - start,
+        total=len(state.texts),
+        initial=start,
     )
     return processed
 
@@ -590,6 +619,10 @@ def handle_load(
 def _unicode_point(char: str) -> str:
     code_point = ord(char)
     return f"U+{code_point:04X}"
+
+
+def _all_unicode_points(text: str) -> str:
+    return " ".join(map(_unicode_point, text))
 
 
 def handle_nonascii(
@@ -663,6 +696,41 @@ def handle_search(
     return "\n".join(hits), state
 
 
+def handle_filter(
+    kwargs: dict[str, str],
+    state: ReplState,
+) -> tuple[FormattedText | str, ReplState]:
+    pattern = kwargs["pattern"]
+    target = kwargs.get("target", None)
+
+    if target is None:
+        result = []
+        for text, _, _ in _process_all_texts(state):
+            try:
+                curr_result = intersect_pattern(
+                    target=text,
+                    pattern=pattern,
+                    registry=state.registry,
+                )
+                breakpoint()
+                result.extend(curr_result)
+            except Exception as e:
+                print(e)
+                continue
+
+            if len(result) >= MAX_OUTPUT_STRINGS:
+                break
+        result = result[:MAX_OUTPUT_STRINGS]
+
+    else:
+        result = intersect_pattern(
+            target=target,
+            pattern=pattern,
+            registry=state.registry,
+        )
+    return "\n".join(result), state
+
+
 _verb_to_func = {
     "add": handle_add,
     "list": handle_list,
@@ -679,6 +747,7 @@ _verb_to_func = {
     "look": handle_look_unicode,
     "map": handle_map,
     "search": handle_search,
+    "filter": handle_filter,
 }
 
 

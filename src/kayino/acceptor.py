@@ -18,10 +18,12 @@ from typing import Literal
 import pynini
 from pynini.lib import rewrite
 from pynini.lib.byte import BYTE
+from pynini.lib.utf8 import VALID_UTF8_CHAR
 
 from kayino.constants import EMPTY_SYMBOL, MAX_OUTPUT_STRINGS, SIGMA_SYMBOL
 from kayino.models import (
     LEFT_DELIMITERS,
+    NEGATION_OPERATORS,
     RIGHT_DELIMITERS,
     STRING_TO_OPERATOR,
     UNARY_OPERATORS,
@@ -245,14 +247,13 @@ def tokenize_str(
 
 
 def _interpret_unary_operator(fst: pynini.Fst, token: Operator) -> pynini.Fst:
-    op = token.string
-    if op == "?":
+    if token == RegexSymbols.OPTIONAL.value:
         return fst.ques
-    if op == "+":
+    if token == RegexSymbols.PLUS.value:
         return fst.plus
-    if op == "*":
+    if token == RegexSymbols.STAR.value:
         return fst.star
-    raise ValueError(f"Unknown unary operator: {op!r}")
+    raise ValueError(f"Unknown unary operator: {token!r}")
 
 
 def _atom_to_fst(
@@ -268,6 +269,11 @@ def _atom_to_fst(
             use_symbol_table=sym_table is not None,
         )
         return pattern_map[token.string]
+    if token is RegexSymbols.DOT.value:
+        return get_sigma(
+            registry=registry,
+            use_symbol_table=sym_table is None,
+        )
     return pynini.accep(token.string, token_type=sym_table)
 
 
@@ -313,8 +319,9 @@ def _parse_delimited_factor(
     left = tokens[i]
     i += 1
     if left == RegexSymbols.LEFT_BRACKET.value:
-        negated = i < len(tokens) and tokens[i] == RegexSymbols.CARET.value
+        negated = i < len(tokens) and tokens[i] in NEGATION_OPERATORS
         if negated:
+            negation_symbol = tokens[i]
             i += 1
         factors, i = _parse_factor_sequence(
             tokens,
@@ -324,10 +331,19 @@ def _parse_delimited_factor(
         )
         inner = pynini.union(*factors)
         if negated:
-            inner = pynini.difference(
-                get_sigma(
+            if negation_symbol == RegexSymbols.ALPHABET_NEGATION.value:
+                if registry is None:
+                    raise ValueError("Alphabet negation requires a Registry")
+                sigma = get_sigma(
                     registry=registry,
-                ),
+                )
+            else:
+                if sym_table is not None:
+                    raise ValueError("Char negation not valid in SymbolTable mode")
+                sigma = VALID_UTF8_CHAR
+
+            inner = pynini.difference(
+                sigma,
                 inner,
             )
         expected = RegexSymbols.RIGHT_BRACKET.value
@@ -555,7 +571,7 @@ def fsm_strings_and_weights(
     fst: pynini.Fst,
     registry: Registry | None = None,
     project: Literal["input", "output"] = "output",
-    nshortest: int | None = MAX_OUTPUT_STRINGS,
+    nshortest: int = MAX_OUTPUT_STRINGS,
     use_symbol_table: bool = False,
 ) -> list[tuple[str, float]]:
     if use_symbol_table:
@@ -591,7 +607,7 @@ def fsm_strings(
     fst: pynini.Fst,
     registry: Registry | None = None,
     project: Literal["input", "output"] = "output",
-    nshortest: int | None = MAX_OUTPUT_STRINGS,
+    nshortest: int = MAX_OUTPUT_STRINGS,
     use_symbol_table: bool = False,
 ) -> list[str]:
     return [
@@ -633,6 +649,5 @@ def filter_strings_by_pattern(
     return fsm_strings(
         pynini.intersect(input_fsa, pattern_fsa).optimize(),
         registry,
-        nshortest=None,
         use_symbol_table=use_symbol_table,
     )

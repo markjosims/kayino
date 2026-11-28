@@ -54,3 +54,9 @@
 {"group": "malformed_byte_regex_with_unicode_and_whitespace", "expression": "(é\n"}
 {"group": "quantifier_repeats_longest_registered_token", "inventory": ["c", "h", "ch"], "expression": "ch+", "accepted": "ch ch", "rejected": "c h"}
 {"group": "whitespace_only_expression_matches_empty_expression", "expression": " \t\r\n\u2003"}
+{"group":"exclusion_language","id":"alphabet-bytes","expression":"[^aŋ]","inventory":["a","ŋ","ch","é"],"use_symbol_table":false,"accepted":["ch","é"],"rejected":["","a","ŋ","ɛ","c","h","ché"]}
+{"group":"exclusion_language","id":"alphabet-symbols","expression":"[^aŋ]","inventory":["a","ŋ","ch","é"],"use_symbol_table":true,"accepted":["ch","é"],"rejected":["","a","ŋ","ch é"]}
+{"group":"exclusion_language","id":"char-without-registry","expression":"[~aŋ]","inventory":null,"use_symbol_table":false,"accepted":["c","é","𠮷","\u0301"],"rejected":["","a","ŋ","ch","e\u0301"]}
+{"group":"exclusion_language","id":"char-with-registry","expression":"[~aŋ]","inventory":["a","ŋ","ch"],"use_symbol_table":false,"accepted":["c","é","𠮷","\u0301"],"rejected":["","a","ŋ","ch","e\u0301"]}
+{"group":"invalid_exclusion_mode","id":"alphabet-without-registry","expression":"[^aŋ]","inventory":null,"use_symbol_table":false}
+{"group":"invalid_exclusion_mode","id":"char-with-symbols","expression":"[~aŋ]","inventory":["a","ŋ","é"],"use_symbol_table":true}

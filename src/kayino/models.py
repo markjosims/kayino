@@ -206,7 +206,7 @@ MACRO_STRUCT_TYPES = tuple(
 )
 
 
-def resolve_struct_type_name(struct_type_name: str) -> str:
+def resolve_macro_struct_type_name(struct_type_name: str) -> str:
     """
     If `struct_type_name` is the member of a union struct,
     return the macro name for the union. Otherwise, return
@@ -286,7 +286,8 @@ class RegexSymbols(Enum):
     PLUS = Operator(string="+")
     OPTIONAL = Operator(string="?")
     UNION = Operator(string="|")
-    CARET = Operator(string="^")
+    ALPHABET_NEGATION = Operator(string="^")
+    CHAR_NEGATION = Operator(string="~")
     LEFT_PAREN = Operator(string="(")
     RIGHT_PAREN = Operator(string=")")
     LEFT_BRACKET = Operator(string="[")
@@ -306,6 +307,10 @@ UNARY_OPERATORS = (
     RegexSymbols.STAR.value,
     RegexSymbols.PLUS.value,
     RegexSymbols.OPTIONAL.value,
+)
+NEGATION_OPERATORS = (
+    RegexSymbols.ALPHABET_NEGATION.value,
+    RegexSymbols.CHAR_NEGATION.value,
 )
 
 STRING_TO_OPERATOR: dict[str, Operator] = {}

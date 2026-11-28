@@ -6,6 +6,7 @@ from kayino.models import NormalizationSpec, Pattern, PrebuiltNorm, Registry, Te
 from kayino.repl.commands import repl_turn
 from kayino.repl.grammar import create_grammar, parse_command
 from kayino.repl.models import ReplState
+from kayino.repl.styles import STATUS_STYLES
 
 
 def test_oov_report_counts_normalized_corpus_after_fsa_error(monkeypatch):
@@ -78,3 +79,27 @@ def test_existing_oov_commands_still_parse(oov_type, return_type):
         "oov_type": oov_type,
         "return_type": return_type,
     }
+
+
+@pytest.mark.parametrize(
+    ("oov_type", "message"),
+    [
+        ("token", "No OOV tokens found."),
+        ("text", "No non-licit texts found."),
+    ],
+)
+@pytest.mark.parametrize("return_type", ["first", "all"])
+def test_oov_no_matches_has_success_message(oov_type, message, return_type):
+    spec = NormalizationSpec("test", licit_patterns=("<A>",))
+    registry = Registry(
+        NormalizationSpec=(spec,),
+        Symbol=(Token("a"), Pattern("<A>", "a")),
+    )
+    state = ReplState(registry=registry, active_spec=spec.name, texts=[Text("a")])
+
+    response, returned_state = repl_turn(
+        f"oov {oov_type} {return_type}", state, create_grammar()
+    )
+
+    assert list(response) == [(STATUS_STYLES.success.value, message)]
+    assert returned_state is state

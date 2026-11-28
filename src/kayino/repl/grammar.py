@@ -100,21 +100,25 @@ class ArgStrings(str, Enum):
 
 
 # ArgString + arg name combos
+# arg convention is _argname_argword
 _name_word = ArgStrings.WORD.value.format(arg_name="name")
 _kind_word = ArgStrings.WORD.value.format(arg_name="kind")
 
-_pattern_string = ArgStrings.PATTERN_WORD.value.format(arg_name="string")
+_string_pattern_word = ArgStrings.PATTERN_WORD.value.format(arg_name="string")
 
 _string = ArgStrings.STRING.value.format(arg_name="string")
 _value_string = ArgStrings.STRING.value.format(arg_name="value")
 _input_string = ArgStrings.STRING.value.format(arg_name="input_str")
 _output_string = ArgStrings.STRING.value.format(arg_name="output_str")
+_pattern_string = ArgStrings.STRING.value.format(arg_name="pattern")
+_target_string = ArgStrings.STRING.value.format(arg_name="target")
+
 
 _text = ArgStrings.TEXT.value.format(arg_name="text")
 _string_text = ArgStrings.TEXT.value.format(arg_name="string")
 
-_quoted_text = ArgStrings.QUOTED.value.format(arg_name="text")
-_description = ArgStrings.QUOTED.value.format(arg_name="description")
+_text_quoted = ArgStrings.QUOTED.value.format(arg_name="text")
+_description_quoted = ArgStrings.QUOTED.value.format(arg_name="description")
 
 _left_context = ArgStrings.LEFT_CONTEXT.value.format(arg_name="left_context")
 _right_context = ArgStrings.RIGHT_CONTEXT.value.format(arg_name="right_context")
@@ -131,8 +135,8 @@ _rwr_args = (
 
 _struct_builder_patterns = {
     Token.__name__: _string,
-    Pattern.__name__: rf"{_pattern_string} \s+ {_value_string}",
-    MappingNorm.__name__: rf"{_name_word} \s+ {_mapping} (\s+ {_description})?",
+    Pattern.__name__: rf"{_string_pattern_word} \s+ {_value_string}",
+    MappingNorm.__name__: rf"{_name_word} \s+ {_mapping} (\s+ {_description_quoted})?",
     CdrewriteNorm.__name__: rf"{_name_word} \s+ {_rwr_args}",
     Text.__name__: _string_text,
     NormalizationSpec.__name__: _name_word,
@@ -230,9 +234,9 @@ REPL commands that do not need specific args per struct type
 
 _simple_command_templates = {
     "read": rf"((?P<verb>read) \s+ {_text})",
-    "tokenize": rf"((?P<verb>tokenize|tkz) \s+ ({_index}|{_quoted_text}|{_text}))",
-    "process": rf"((?P<verb>process|pro?c) \s+ ({_index}|{_quoted_text}|{_text}))",
-    "apply": rf"((?P<verb>apply|apl) \s+ {_name_word} \s+ ({_index}|{_quoted_text}|{_text}))",
+    "tokenize": rf"((?P<verb>tokenize|tkz) \s+ ({_index}|{_text_quoted}|{_text}))",
+    "process": rf"((?P<verb>process|pro?c) \s+ ({_index}|{_text_quoted}|{_text}))",
+    "apply": rf"((?P<verb>apply|apl) \s+ {_name_word} \s+ ({_index}|{_text_quoted}|{_text}))",
     "oov": (
         r"((?P<verb>oov) (\s+(?P<report>report)|"
         r"(\s+(?P<oov_type>text|token))? (\s+(?P<return_type>first|all))?"
@@ -242,8 +246,9 @@ _simple_command_templates = {
     "save": rf"((?P<verb>save) \s+(?P<path>.*))",
     "nonascii": rf"((?P<verb>nonascii) \s+ (?P<target>raw|processed))",
     "look": rf"((?P<verb>look) \s+ (?P<target>raw|processed))"
-    rf"\s+ ({_index}|{_quoted_text}|{_text})",
+    rf"\s+ ({_index}|{_text_quoted}|{_text})",
     "search": rf"((?P<verb>search) \s+ (?P<query>.*))",
+    "filter": rf"((?P<verb>fil(ter)?) \s+ {_pattern_string} (\s+ {_target_string})?)",
 }
 
 """
@@ -356,6 +361,7 @@ _shorthand_to_command_name = {
     "l": "list",
     "a": "add",
     "act": "activate",
+    "fil": "filter",
 }
 
 _shorthand_maps = {

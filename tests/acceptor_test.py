@@ -248,6 +248,34 @@ def test_malformed_regex_raises_value_error(regex_mode, expression):
         fsa(expression, registry, use_symbol_table=table is not None)
 
 
+@_parametrize(
+    "regex", "exclusion_language", "expression", "inventory", "use_symbol_table",
+    "accepted", "rejected",
+)
+def test_exclusion_language(expression, inventory, use_symbol_table, accepted, rejected):
+    tokens = tuple(Token(value) for value in inventory) if inventory is not None else ()
+    registry = Registry(Symbol=tokens) if inventory is not None else None
+    compiled = fsa(expression, registry, use_symbol_table=use_symbol_table)
+    token_type = symbol_table_for_tokens(tokens) if use_symbol_table else "byte"
+
+    for candidate, expected in (
+        *((value, True) for value in accepted),
+        *((value, False) for value in rejected),
+    ):
+        probe = pynini.accep(candidate, token_type=token_type)
+        matches = pynini.compose(probe, compiled).start() != pynini.NO_STATE_ID
+        assert matches == expected, repr(candidate)
+
+
+@_parametrize("regex", "invalid_exclusion_mode", "expression", "inventory", "use_symbol_table")
+def test_invalid_exclusion_mode(expression, inventory, use_symbol_table):
+    registry = None if inventory is None else Registry(
+        Symbol=tuple(Token(value) for value in inventory)
+    )
+    with pytest.raises(ValueError):
+        fsa(expression, registry, use_symbol_table=use_symbol_table)
+
+
 def test_quantifier_repeats_longest_registered_token(case):
     inventory = tuple(Token(token) for token in case["inventory"])
     table = symbol_table_for_tokens(inventory)

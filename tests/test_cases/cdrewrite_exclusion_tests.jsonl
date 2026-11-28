@@ -1,0 +1,6 @@
+{"id":"alphabet-match","inventory":["a","b","ŋ"],"rule":{"input_str":"[^a]","output_str":"x"},"text":"a b ŋ 𠮷","expected":"a x x 𠮷"}
+{"id":"char-match","inventory":null,"rule":{"input_str":"[~a]","output_str":"x"},"text":"abŋ𠮷","expected":"axxx"}
+{"id":"alphabet-left","inventory":["a","ə","ŋ"],"rule":{"input_str":"t","output_str":"d","left_context":"[^a]"},"text":"at ət ŋt ɛt","expected":"at əd ŋd ɛt"}
+{"id":"alphabet-right","inventory":["a","ə","ŋ"],"rule":{"input_str":"t","output_str":"d","right_context":"[^a]"},"text":"ta tə tŋ tɛ","expected":"ta də dŋ tɛ"}
+{"id":"char-left","inventory":["a","ə","ŋ"],"rule":{"input_str":"t","output_str":"d","left_context":"[~a]"},"text":"at ət ŋt ɛt","expected":"at əd ŋd ɛd"}
+{"id":"char-right","inventory":["a","ə","ŋ"],"rule":{"input_str":"t","output_str":"d","right_context":"[~a]"},"text":"ta tə tŋ tɛ","expected":"ta də dŋ dɛ"}
